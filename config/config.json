@@ -1,0 +1,183 @@
+{
+  "wallets": [
+    {
+      "name": "wallet_2",
+      "private_key": "Z0FBQUFBQnBCUG81SHNMQTljQXhiMTdsekdobFB5MjZNSkQxblR6cjRJRVktaHpUWVJXbFZTZkExTXRLNEwzc1dmVzYwRlAybDN2V3JVRzdKNHJ5VmJ5RDY3ZHViOWcxQzZBaDA0T2x2TV81cy14eUpZSU5xZFExWUsxTEllcGItdzlVeFpMYUNaVncxVDg4MWRxNENGVnhTQm45bUY3OHZOSXh6RERoMklRMS1xMFc3WDdLUnBFPQ==",
+      "proxy": {
+        "ip": "156.246.156.208",
+        "port": "64054",
+        "username": "QGGQ1e78",
+        "password": "evLhUHHc"
+      }
+    },
+    {
+      "name": "wallet_1",
+      "private_key": "Z0FBQUFBQnBCUDduU3dkYkpBRlgxZGFiNElsQkVNa1R3LW9sXzVKQ0RhSlZPTkdHWnByN1kybS1yUTlVU1J2Yk5JZXVQQUo3ckJEMUFPQTE3T2ZLckVabmZQYzN3dU5RbkxDd0g3NEE0ZDVtZkdhUGZTUGN4eXBYcDRtM3AtMlJKZkpiTE9UYW42NkdNNF9QQlNIX19HRzJwNkc5aW1YODYyNXNINDY4NzBLbzU0bVpsM09XVnpnPQ==",
+      "proxy": {
+        "ip": "154.205.229.12",
+        "port": "63254",
+        "username": "QGGQ1e78",
+        "password": "evLhUHHc"
+      }
+    },
+    {
+      "name": "wallet_3",
+      "private_key": "Z0FBQUFBQnBCYW5NRXBVaHZrdVNqM3E1R1F4SXRFYTlqR1V0Y0RraTRsdHp2SUQ5UzVRcVFZNkxWTlVJVzJUWkU4cWlkQjkzNVdFcnBHUVBUSGp3UU45UnBaX2hMeGw0S1ZINjM2VHEzWmttWTN3c1RROExmb2pXN3pjaWZjVFBXYUlSSGFiZTJMMFRfUUo0OHN6Vkc5YWxoVzhQbzJjZGNrWWFTeXN5Q1oydjRsWVJZSTVaWkdzPQ==",
+      "proxy": {
+        "ip": "154.205.28.142",
+        "port": "63884",
+        "username": "QGGQ1e78",
+        "password": "evLhUHHc"
+      }
+    },
+    {
+      "name": "wallet_4",
+      "private_key": "Z0FBQUFBQnBCYXR6SHZFZFc0S1FlNTNfQnZEcy1jMUpvbTlyc3RYNU84WjJEaXJZQnNqdEdDdDdGSTRqRk5rQVRkVTNURGN1S3ZEMGVUaERQb2ZiMkM1bVVGay1tZGMtdFVkVmJIVVlUUVhXWkxkdjcyeGhwNV83WmFmYWVjZFk5ZmstWDR4cy1LbGpxSGxoRk9iMGdGcVNFMWFrbWhnYlJ6RG1nNlExdzBrdlR2TE9iS1k1Q3hJPQ==",
+      "proxy": {
+        "ip": "154.205.229.39",
+        "port": "64814",
+        "username": "QGGQ1e78",
+        "password": "evLhUHHc"
+      }
+    },
+    {
+      "name": "wallet_5",
+      "private_key": "Z0FBQUFBQnBCYTFNbWo1V2dVR2RyTkp5YlVXVDFJX05ncEYza1Z6aHFwOFphWGlmazBVV29JaEd5dTFKMUNWM1dPa1A2UFpUWmZBZGVHV0pKb1I0SXNudWRqM3p4eWprbjM1ak1aLWNfQ0FIT3ZZU09TTjVIc1NGbjJqWnEyd2xGRlIwMVM2cE52Q29xT29JMlBGZllmLWZHdVdiR2NkRlAwV0tqU2hPUWxzRU5pNHhUbjljeFYwPQ==",
+      "proxy": {
+        "ip": "154.205.226.58",
+        "port": "64480",
+        "username": "QGGQ1e78",
+        "password": "evLhUHHc"
+      }
+    },
+    {
+      "name": "wallet_7",
+      "private_key": "Z0FBQUFBQnBCYkdUYkZyMkY2dVFHaXpSa3lVdW9BeUY4bXN4bXUyMkhGRlVQZGxmMUpxQm1tTHhuanNnTXdtVnFSd3JBY051NDNaa1gyYVJXQmZZdWphSkc1N3JBekxZZ21UR21ERkJvNGY0bHVhVkRBZm84VXRxRTRmRnlCTFE3MDdXemJVNUkxRFBGWVI1QU8yWnluM0hoZElYSFotckxPb2pVS0dsTW1kUlYtYlczeWZwTXpzPQ==",
+      "proxy": {
+        "ip": "194.156.1.172",
+        "port": "64492",
+        "username": "QGGQ1e78",
+        "password": "evLhUHHc"
+      }
+    },
+    {
+      "name": "wallet_8",
+      "private_key": "Z0FBQUFBQnBCYllIbUFIdU9LdDlqNFYxaFNWcWZOWWptQU1rckZMd1dQLXk4ekNvaVhPVWpnZHo3V3dhUjNMWW9YUTZ0eW5OWG1WYnREekVlVkphZlpCRG4wQXdjWGljU1IzTEZqSXlGUHk3WDdrQzQwOFBsVllyMXUtNEJKNlhpTHF6dXBwM1NfLS1KYUxwbnRGWWZiWmxxQnNSbk5lcFp4Z3JzTE1maEZBYlQwM2FxaXdQZGVzPQ==",
+      "proxy": {
+        "ip": "194.156.1.106",
+        "port": "62978",
+        "username": "QGGQ1e78",
+        "password": "evLhUHHc"
+      }
+    },
+    {
+      "name": "wallet_9",
+      "private_key": "Z0FBQUFBQnBCYmJsMi15OHROTXBXTjZxMDFFOFBXNWxUYmxIamlGcXR2dkd0aEY2RmhveUJYY3RoeGlBREJoN3BZOTY1OGFmblFKY3BlblhKSGlQc3pmdGtJc19FUlFwazdjRXdrVnNBTndlbW5yd3R6T0tfU2JXTzFOdWlUUDhHdEF5YjBpZGYyWTI1TWtVekh4Z2FiN0plRWc3cmZiNWxrYmRfWWZEQXlpWXo4MTI2TDk5cWdRPQ==",
+      "proxy": {
+        "ip": "195.245.110.236",
+        "port": "63044",
+        "username": "QGGQ1e78",
+        "password": "evLhUHHc"
+      }
+    },
+    {
+      "name": "wallet_10",
+      "private_key": "Z0FBQUFBQnBCYmtDRUpzVzM3YUJ1LUpfeG5Ob0JIYjVfVVROcVUxS0YxcW9RRnpuNnhmcDNNSHZ6MTdsTGp2LWlseUxoQVptaXRjcTBNRzFNRUNsU01xRnlRazlCWTlCWUlXVkF3cmE1dldJeHlmYTFkS2w1U2tqbUVmNERvblFqN0FSdWhLY0tSVE1sWHQ3OXlPcmtTSVpnWWMyaEFqNEl5THY4RGFadG1WazJFWDkzbVlGZzR3PQ==",
+      "proxy": {
+        "ip": "194.156.1.251",
+        "port": "64492",
+        "username": "QGGQ1e78",
+        "password": "evLhUHHc"
+      }
+    },
+    {
+      "name": "wallet_6",
+      "private_key": "Z0FBQUFBQnBCYnNoX253RERLWU1PVHBEV2FSeTZmdGJwMlF4QVI4MUtIX0E1Wl8waURJanhrY2ZrbUYwYVB4QTNOQVdTcXJDalE4cTJESVk2eEY4b1FCSTV3UDVkOGZTczIxZkMta2JDX3NKMmdoaFR1WWZIVER4ajRQUHhoTzZrY1VaTGk1RGtUSmxJMUNfalB4UHNYWlVSbzVkYV83U3Fzem9HeVJJd3Y4ZktINERmbjF0N2hnPQ==",
+      "proxy": {
+        "ip": "194.156.1.143",
+        "port": "64492",
+        "username": "QGGQ1e78",
+        "password": "evLhUHHc"
+      }
+    },
+    {
+      "name": "wallet_0",
+      "private_key": "Z0FBQUFBQnBCYnpqOFc2Z3liQmM5dlpGQTVfTFV1R2k5MkZhYTAxLThmSVFvaFFqSGhtTXY0T3NJejhvNkR0d0p5a1U2R1ZrSWVPdTRoLXIyTWE5QjNfUlpqSUEwYUE3VlFmNS1EVTY5cjluS2U1QUJ0UUhSeU9uMlB3cDgyMkExZkNMQ3V1ZVNSamR4VzhZMUo1Sk1lNTdLN3pLLXd1UXJTcDFoRkVITVFtTTJQZDJuQURER0RFPQ==",
+      "proxy": null
+    }
+  ],
+  "networks": [
+    {
+      "name": "Pharos Atlantic",
+      "rpc_url": "https://atlantic.dplabs-internal.com",
+      "wss_url": "wss://atlantic.dplabs-internal.com",
+      "explorer": "https://atlantic.pharosscan.xyz",
+      "chain_id": 688689,
+      "native_token": "PHRS",
+      "tokens": {
+        "PHRS": "0x0000000000000000000000000000000000000000",
+        "USDC": "0xE0BE08c77f415F577A1B3A9aD7a1Df1479564ec8",
+        "USDT": "0xE7E84B8B4f39C507499c40B4ac199B050e2882d5",
+        "WBTC": "0x0c64F03EEa5c30946D5c55B4b532D08ad74638a4",
+        "WETH": "0x7d211F77525ea39A0592794f793cC1036eEaccD5",
+        "WPHRS": "0x838800b758277CC111B2d48Ab01e5E164f8E9471"
+      },
+      "contracts": {
+        "faroswap_router": "0x1E656B2C6B6e91ef6E6A2B16475Df7b7D223e3c2",
+        "cashplus_subscription": "0x56f4add11d723412d27a9e9433315401b351d6e3"
+      }
+    },
+    {
+      "name": "Rise Testnet",
+      "rpc_url": "https://testnet.riselabs.xyz",
+      "wss_url": "wss://testnet.riselabs.xyz/ws",
+      "explorer": "https://explorer.testnet.riselabs.xyz",
+      "chain_id": 11155931,
+      "native_token": "ETH",
+      "tokens": {
+        "ETH": "0x0000000000000000000000000000000000000000",
+        "WETH": "0x4200000000000000000000000000000000000006",
+        "USDC": "0x8a93d247134d91e0de6f96547cb0204e5be8e5d8",
+        "USDT": "0x40918ba7f132e0acba2ce4de4c4baf9bd2d7d849",
+        "WBTC": "0xf32d39ff9f6aa7a7a64d7a4f00a54826ef791a55",
+        "RISE": "0xd6e1afe5ca8d00a2efc01b89997abe2de47fdfaf",
+        "CUSD": "0xA985e387dDF21b87c1Fe8A0025D827674040221E",
+        "MOG": "0x99dbe4aea58e518c50a1c04ae9b48c9f6354612f",
+        "PEPE": "0x6f6f570f45833e249e27022648a26f4076f48f78"
+      },
+      "contracts": {
+        "gaspump_router": "0x5eC9BEaCe4a0f46F77945D54511e2b454cb8F38E"
+      }
+    },
+    {
+      "name": "OPN Testnet",
+      "rpc_url": "https://testnet-rpc.iopn.tech",
+      "explorer": "https://testnet.iopn.tech",
+      "chain_id": 984,
+      "native_token": "OPN",
+      "tokens": {
+        "OPN": "0x0000000000000000000000000000000000000000",
+        "USDC": "0x3600000000000000000000000000000000000000",
+        "EURC": "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a"
+      },
+      "contracts": {}
+    }
+  ],
+  "operations": {
+    "min_per_transaction": 1,
+    "max_per_transaction": 2,
+    "min_interval_minutes": 2,
+    "max_interval_minutes": 5,
+    "swap_percentage_min": 1.0,
+    "swap_percentage_max": 5.0
+  },
+  "subscription_settings": {
+    "min_usdt_balance": 0.1,
+    "min_subscription_amount": 0.02,
+    "max_subscription_amount": 0.2,
+    "max_percentage_of_balance": 80,
+    "max_transactions_per_wallet": 300,
+    "retry_attempts": 2,
+    "delay_between_wallets": 15
+  }
+}

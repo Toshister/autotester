@@ -1,0 +1,29 @@
+{
+  "wallets": [
+    {
+      "name": "test_wallet_1",
+      "private_key": "encrypted_test_key_1",
+      "proxy": null
+    }
+  ],
+  "networks": [
+    {
+      "name": "sepolia",
+      "rpc_url": "https://rpc.sepolia.org",
+      "chain_id": 11155111,
+      "native_token": "ETH"
+    }
+  ],
+  "operations": {
+    "min_per_transaction": 1,
+    "max_per_transaction": 2,
+    "min_interval_minutes": 1,
+    "max_interval_minutes": 2
+  },
+  "tokens": {
+    "sepolia": {
+      "ETH": "0x0000000000000000000000000000000000000000",
+      "TEST": "0x0000000000000000000000000000000000000001"
+    }
+  }
+}
