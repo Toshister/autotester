@@ -244,7 +244,11 @@ class SubscriptionService:
 
             self.logger.info(f"📝 Approval transaction sent for {wallet.name}: {tx_hash.hex()}")
 
-            receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            receipt = await asyncio.to_thread(
+                self.web3.eth.wait_for_transaction_receipt,
+                tx_hash,
+                timeout=120
+            )
 
             if receipt.status == 1:
                 # ✅ УВЕЛИЧИВАЕМ СЧЕТЧИК ТРАНЗАКЦИЙ ПРИ УСПЕШНОМ APPROVE
@@ -303,7 +307,11 @@ class SubscriptionService:
 
             self.logger.info(f"📤 Subscribe transaction sent for {wallet.name}: {tx_hash.hex()}")
 
-            receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            receipt = await asyncio.to_thread(
+                self.web3.eth.wait_for_transaction_receipt,
+                tx_hash,
+                timeout=120
+            )
 
             if receipt.status == 1:
                 self.logger.info(f"✅ {wallet.name} subscribe successful! TX: {tx_hash.hex()}")

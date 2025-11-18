@@ -78,11 +78,12 @@ class ProxyManager:
             web3 = Web3(Web3.HTTPProvider(rpc_url))
 
         # Для сетей PoA (как Pharos) - используем новый способ
-        self._inject_poa_middleware(web3)
+        ProxyManager.inject_poa_middleware(web3)
 
         return web3
 
-    def _inject_poa_middleware(self, web3: Web3):
+    @staticmethod
+    def inject_poa_middleware(web3: Web3):
         """Инжект middleware для сетей PoA"""
         try:
             # Пробуем новый импорт для современных версий web3.py

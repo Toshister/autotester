@@ -65,13 +65,12 @@ class TransactionEngine:
             self.logger.info(f"🎯 Set operation weights for {normalized_network}: Transfer & Swap")
 
         elif is_opn_network(normalized_network):
-            # ✅ ДЛЯ OPN TESTNET - ТОЛЬКО TRANSFER
             self.operation_weights = {
-                'transfer': 100,
-                'swap': 0,
+                'transfer': 60,
+                'swap': 40,
                 'subscribe': 0
             }
-            self.logger.info(f"🎯 Set operation weights for {normalized_network}: Transfer only")
+            self.logger.info(f"🎯 Set operation weights for {normalized_network}: Transfer & Swap")
 
         else:
             # Для других сетей - стандартные веса
@@ -119,26 +118,31 @@ class TransactionEngine:
     def start_monitoring(self):
         """Запуск мониторинга в реальном времени"""
         self.real_time_stats['start_time'] = time.time()
-        asyncio.create_task(self._update_real_time_stats())
+        asyncio.create_task(self._real_time_stats_loop())
 
-    async def _update_real_time_stats(self):
-        """Обновление статистики в реальном времени"""
+    async def _real_time_stats_loop(self):
+        """Фоновое обновление статистики"""
         while True:
             await asyncio.sleep(30)
+            self._recalculate_real_time_stats()
 
-            elapsed_minutes = (time.time() - self.real_time_stats['start_time']) / 60
-            if elapsed_minutes > 0:
-                self.real_time_stats['operations_per_minute'] = (
-                        self.real_time_stats['total_operations'] / elapsed_minutes
-                )
+    def _recalculate_real_time_stats(self):
+        """Пересчет статистики (можно вызывать вручную)"""
+        elapsed_minutes = (time.time() - self.real_time_stats['start_time']) / 60
+        if elapsed_minutes > 0:
+            self.real_time_stats['operations_per_minute'] = (
+                self.real_time_stats['total_operations'] / elapsed_minutes
+            )
 
-            # Рассчитываем успешность
-            total_ops = self.real_time_stats['total_operations']
-            if total_ops > 0:
-                successful_ops = self.real_time_stats['successful_operations']
-                self.real_time_stats['success_rate'] = (successful_ops / total_ops) * 100
+        # Рассчитываем успешность
+        total_ops = self.real_time_stats['total_operations']
+        if total_ops > 0:
+            successful_ops = self.real_time_stats['successful_operations']
+            self.real_time_stats['success_rate'] = (successful_ops / total_ops) * 100
+        else:
+            self.real_time_stats['success_rate'] = 0.0
 
-            self._display_real_time_stats()
+        self._display_real_time_stats()
 
     def _display_real_time_stats(self):
         """Отображение статистики в реальном времени"""
@@ -263,7 +267,7 @@ class TransactionEngine:
                     operation_count += 1
 
                     # ✅ ОБНОВЛЯЕМ СТАТИСТИКУ В РЕАЛЬНОМ ВРЕМЕНИ
-                    self._update_real_time_stats()
+                    self._recalculate_real_time_stats()
 
                     # ✅ СЛУЧАЙНАЯ ЗАДЕРЖКА ОТ 15 СЕКУНД ДО 2 МИНУТ
                     delay_seconds = random.randint(15, 120)

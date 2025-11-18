@@ -478,8 +478,12 @@ class TransferService:
 
             self.logger.info(f"📤 Transaction sent: {tx_hash.hex()}")
 
-            # Ждем подтверждения
-            receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=180)
+            # Ждем подтверждения (не блокируем event loop)
+            receipt = await asyncio.to_thread(
+                self.web3.eth.wait_for_transaction_receipt,
+                tx_hash,
+                timeout=180
+            )
 
             if receipt.status == 1:
                 gas_used = receipt.gasUsed

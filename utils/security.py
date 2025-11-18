@@ -1,17 +1,19 @@
 import os
 import base64
 import re
-from cryptography.fernet import Fernet
+from pathlib import Path
+from typing import List, Optional
+from cryptography.fernet import Fernet, InvalidToken
+from dotenv import load_dotenv
 from eth_account import Account
 
 
 class SecurityManager:
-    def __init__(self, encryption_key: str = None):
-        # Используем ключ из переменных окружения или генерируем по умолчанию
+    def __init__(self, encryption_key: str = None, fallback_keys: Optional[List[str]] = None):
+        # Используем ключ из переменных окружения
         self.encryption_key = encryption_key or os.getenv('ENCRYPTION_KEY')
         if not self.encryption_key:
-            # Для тестов создаем ключ по умолчанию
-            self.encryption_key = "test_encryption_key_32_bytes_long!"
+            raise ValueError("ENCRYPTION_KEY is not set. Call setup_secure_environment() first.")
 
         # Дополняем ключ до 32 байт если нужно
         if len(self.encryption_key) < 32:
@@ -22,6 +24,33 @@ class SecurityManager:
         # Кодируем в base64 для Fernet
         key_b64 = base64.urlsafe_b64encode(self.encryption_key.encode())
         self.cipher_suite = Fernet(key_b64)
+
+        self.legacy_ciphers = []
+        self.legacy_warning_emitted = False
+
+        legacy_keys = fallback_keys[:] if fallback_keys else []
+
+        legacy_env = os.getenv('LEGACY_ENCRYPTION_KEYS')
+        if legacy_env:
+            legacy_keys.extend([key.strip() for key in legacy_env.split(',') if key.strip()])
+
+        default_legacy = "test_encryption_key_32_bytes_long!"
+        if default_legacy not in legacy_keys:
+            legacy_keys.append(default_legacy)
+
+        for legacy_key in legacy_keys:
+            if not legacy_key:
+                continue
+            normalized = legacy_key
+            if len(normalized) < 32:
+                normalized = normalized.ljust(32, '0')
+            elif len(normalized) > 32:
+                normalized = normalized[:32]
+            legacy_b64 = base64.urlsafe_b64encode(normalized.encode())
+            try:
+                self.legacy_ciphers.append(Fernet(legacy_b64))
+            except Exception:
+                continue
 
     def encrypt_private_key(self, private_key: str) -> str:
         """
@@ -41,19 +70,30 @@ class SecurityManager:
         """
         Дешифрование приватного ключа
         """
+        encrypted_bytes = base64.urlsafe_b64decode(encrypted_key.encode())
+
         try:
-            # Декодируем из base64
-            encrypted_bytes = base64.urlsafe_b64decode(encrypted_key.encode())
             decrypted = self.cipher_suite.decrypt(encrypted_bytes)
-            private_key = decrypted.decode()
-
-            # Добавляем 0x если нужно
-            if not private_key.startswith('0x'):
-                private_key = '0x' + private_key
-
-            return private_key
+            return self._ensure_hex_prefix(decrypted.decode())
+        except InvalidToken:
+            for cipher in self.legacy_ciphers:
+                try:
+                    decrypted = cipher.decrypt(encrypted_bytes)
+                    if not self.legacy_warning_emitted:
+                        print("⚠️  Using legacy encryption key for wallet data. "
+                              "Перешифруйте кошельки с новым ENCRYPTION_KEY как можно скорее.")
+                        self.legacy_warning_emitted = True
+                    return self._ensure_hex_prefix(decrypted.decode())
+                except InvalidToken:
+                    continue
+            raise ValueError("Decryption failed: invalid encryption key")
         except Exception as e:
             raise ValueError(f"Decryption failed: {e}")
+
+    def _ensure_hex_prefix(self, private_key: str) -> str:
+        if not private_key.startswith('0x'):
+            return '0x' + private_key
+        return private_key
 
     def _normalize_private_key(self, private_key: str) -> str:
         """Нормализация формата приватного ключа"""
@@ -106,29 +146,37 @@ class SecurityManager:
         return secure_message
 
 
-# Создаем глобальный экземпляр для удобства
-security_manager = SecurityManager()
+_security_manager = None
+
+
+def _get_security_manager() -> SecurityManager:
+    """Ленивая инициализация менеджера безопасности"""
+    global _security_manager
+    if _security_manager is None:
+        setup_secure_environment()
+        _security_manager = SecurityManager()
+    return _security_manager
 
 
 # Функции для прямого импорта
 def encrypt_private_key(private_key: str) -> str:
     """Шифрование приватного ключа"""
-    return security_manager.encrypt_private_key(private_key)
+    return _get_security_manager().encrypt_private_key(private_key)
 
 
 def decrypt_private_key(encrypted_key: str) -> str:
     """Дешифрование приватного ключа"""
-    return security_manager.decrypt_private_key(encrypted_key)
+    return _get_security_manager().decrypt_private_key(encrypted_key)
 
 
 def validate_private_key(private_key: str) -> bool:
     """Валидация приватного ключа"""
-    return security_manager.validate_private_key(private_key)
+    return _get_security_manager().validate_private_key(private_key)
 
 
 def secure_log(message: str) -> str:
     """Безопасное логирование"""
-    return security_manager.secure_log(message)
+    return _get_security_manager().secure_log(message)
 
 
 def generate_secure_key() -> str:
@@ -139,16 +187,27 @@ def generate_secure_key() -> str:
 
 def setup_secure_environment():
     """Настройка безопасного окружения"""
-    if not os.getenv('ENCRYPTION_KEY'):
-        print("⚠️  ENCRYPTION_KEY not found in environment variables")
-        print("🔑 Generating temporary encryption key...")
+    load_dotenv()
 
-        # Генерируем временный ключ (в продакшене должен быть в .env)
-        temp_key = generate_secure_key()
-        os.environ['ENCRYPTION_KEY'] = temp_key
+    if os.getenv('ENCRYPTION_KEY'):
+        return
 
-        print("✅ Temporary encryption key generated")
-        print("🚨 WARNING: For production use, set ENCRYPTION_KEY in .env file!")
+    print("⚠️  ENCRYPTION_KEY not found in environment variables")
+    print("🔑 Generating new encryption key and saving it to .env ...")
+
+    new_key = generate_secure_key()
+    os.environ['ENCRYPTION_KEY'] = new_key
+
+    env_path = Path('.env')
+    try:
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        with env_path.open('a') as env_file:
+            env_file.write(f"\nENCRYPTION_KEY={new_key}\n")
+        print(f"✅ ENCRYPTION_KEY saved to {env_path.resolve()}")
+    except Exception as exc:
+        print(f"⚠️  Failed to write ENCRYPTION_KEY to .env: {exc}")
+
+    print("🚨 WARNING: Keep the generated key safe. Losing it will make existing wallets unreadable!")
 
 
 def test_encryption_performance():
@@ -170,7 +229,6 @@ def test_encryption_performance():
 
 
 if __name__ == "__main__":
-    test_security()
     test_encryption_performance()
 # Автоматическая настройка при импорте
 setup_secure_environment()

@@ -3,7 +3,7 @@ import random
 from web3 import Web3
 from utils.logger import setup_logger
 from utils.randomizer import Randomizer
-from config.constants import is_rise_network, normalize_network_name
+from config.constants import is_rise_network, is_opn_network, normalize_network_name
 
 
 class SwapService:
@@ -15,12 +15,12 @@ class SwapService:
 
         # ✅ ABI
         self.erc20_abi = self._get_erc20_abi()
-        self.router_abi = self._get_gaspump_abi()
+        self.router_abi = None
 
         # ✅ ИНИЦИАЛИЗАЦИЯ РОУТЕРА
         self.router_address = None
         self.router_contract = None
-        self.router_type = "gaspump"
+        self.router_type = None
 
         self._initialize_router()
 
@@ -32,37 +32,49 @@ class SwapService:
                 return
 
             chain_id = self.web3.eth.chain_id
+            network_config = self.config.get_network_by_chain_id(chain_id)
+            network_name = network_config['name'] if network_config else ""
+            normalized_name = normalize_network_name(network_name)
+
             self.logger.info(f"🔍 Initializing router for chain_id: {chain_id}")
 
-            # ✅ ОБНОВЛЕННЫЙ СПИСОК СЕТЕЙ
-            if chain_id == 11155931:  # Rise Testnet
-                self.router_address = "0x5eC9BEaCe4a0f46F77945D54511e2b454cb8F38E"
+            if is_rise_network(normalized_name) or chain_id == 11155931:
+                configured_address = None
+                if network_config:
+                    configured_address = network_config.get('contracts', {}).get('gaspump_router')
+                self.router_address = configured_address or "0x5eC9BEaCe4a0f46F77945D54511e2b454cb8F38E"
                 self.router_type = "gaspump"
-                self.logger.info("✅ Detected Rise Testnet - using Gaspump router")
+                self.router_abi = self._get_gaspump_abi()
+                self.logger.info("✅ Using Gaspump router for Rise Testnet")
 
-            elif chain_id == 688689:  # Pharos Atlantic
+            elif is_opn_network(normalized_name) or chain_id == 984:
+                configured_address = None
+                if network_config:
+                    configured_address = network_config.get('contracts', {}).get('iopn_router')
+                self.router_address = configured_address or "0xb489bce5c9c9364da2d1d1bc5ce4274f63141885"
+                self.router_type = "iopn"
+                self.router_abi = self._get_iopn_router_abi()
+                self.logger.info("✅ Using IOPN router for OPN Testnet")
+
+            elif chain_id == 688689:
                 self.router_address = "0x1E656B2C6B6e91ef6E6A2B16475Df7b7D223e3c2"
                 self.router_type = "faroswap"
-                self.logger.info("✅ Detected Pharos Atlantic - using Faroswap router")
-
-            elif chain_id == 984:  # ✅ OPN Testnet
-                self.router_address = None  # Нет роутера для OPN
-                self.router_type = "none"
-                self.logger.info("✅ Detected OPN Testnet - no swap router available")
+                self.router_abi = self._get_gaspump_abi()
+                self.logger.info("✅ Detected Pharos Atlantic - Faroswap router (not active)")
 
             else:
                 self.logger.error(f"❌ Unsupported chain_id: {chain_id}")
                 return
 
             # ✅ СОЗДАЕМ КОНТРАКТ ТОЛЬКО ЕСЛИ ЕСТЬ АДРЕС
-            if self.router_address:
+            if self.router_address and self.router_abi:
                 self.router_contract = self.web3.eth.contract(
                     address=Web3.to_checksum_address(self.router_address),
                     abi=self.router_abi
                 )
                 self.logger.info(f"✅ {self.router_type} router initialized: {self.router_address}")
             else:
-                self.logger.info(f"ℹ️ No router address for {self.router_type}")
+                self.logger.info(f"ℹ️ No router address for {self.router_type or 'unknown'}")
 
         except Exception as e:
             self.logger.error(f"❌ Router initialization failed: {e}")
@@ -104,6 +116,23 @@ class SwapService:
                     {"internalType": "uint256[]", "name": "distribution", "type": "uint256[]"}
                 ],
                 "stateMutability": "view",
+                "type": "function"
+            }
+        ]
+
+    def _get_iopn_router_abi(self):
+        """ABI для IOPN Router"""
+        return [
+            {
+                "inputs": [
+                    {"internalType": "uint256", "name": "amountOutMin", "type": "uint256"},
+                    {"internalType": "address[]", "name": "path", "type": "address[]"},
+                    {"internalType": "address", "name": "to", "type": "address"},
+                    {"internalType": "uint256", "name": "deadline", "type": "uint256"}
+                ],
+                "name": "swapExactOPNForTokens",
+                "outputs": [],
+                "stateMutability": "payable",
                 "type": "function"
             }
         ]
@@ -150,6 +179,27 @@ class SwapService:
                 ],
                 "name": "allowance",
                 "outputs": [{"name": "", "type": "uint256"}],
+                "type": "function"
+            }
+        ]
+
+    def _get_wopn_abi(self):
+        """ABI для WOPN (wrap)"""
+        return [
+            {
+                "inputs": [],
+                "name": "deposit",
+                "outputs": [],
+                "stateMutability": "payable",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    {"internalType": "uint256", "name": "wad", "type": "uint256"}
+                ],
+                "name": "withdraw",
+                "outputs": [],
+                "stateMutability": "nonpayable",
                 "type": "function"
             }
         ]
@@ -239,7 +289,11 @@ class SwapService:
 
             self.logger.info(f"📝 Approval transaction sent: {tx_hash.hex()}")
 
-            receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            receipt = await asyncio.to_thread(
+                self.web3.eth.wait_for_transaction_receipt,
+                tx_hash,
+                timeout=120
+            )
             if receipt.status == 1:
                 self.logger.info("✅ Approval successful")
                 return True
@@ -383,7 +437,11 @@ class SwapService:
             self.logger.info(f"📤 GASPUMP transaction sent: {tx_hash.hex()}")
 
             # Ждем подтверждения
-            receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
+            receipt = await asyncio.to_thread(
+                self.web3.eth.wait_for_transaction_receipt,
+                tx_hash,
+                timeout=120
+            )
 
             if receipt.status == 1:
                 self.logger.info(f"✅ GASPUMP successful! TX: {tx_hash.hex()}")
@@ -406,31 +464,33 @@ class SwapService:
             return False
 
     async def execute_random_swap(self, wallet, network_name: str) -> bool:
-        """✅ ИСПРАВЛЕННАЯ ВЕРСИЯ С ПРАВИЛЬНОЙ ПРОВЕРКОЙ СЕТИ"""
-        try:
-            # ✅ ИСПОЛЬЗУЕМ УНИФИЦИРОВАННУЮ ПРОВЕРКУ СЕТИ
-            if not is_rise_network(network_name):
-                self.logger.info(f"⚠️ Gaspump swap only available for Rise Testnet network")
-                return False
+        """Диспетчер свапов в зависимости от сети"""
+        normalized_network = normalize_network_name(network_name)
 
+        if is_rise_network(normalized_network):
+            return await self._execute_rise_swap(wallet, normalized_network)
+
+        if is_opn_network(normalized_network):
+            return await self._execute_opn_swap(wallet, normalized_network)
+
+        self.logger.info(f"⚠️ Swap operations недоступны для сети {normalized_network}")
+        return False
+
+    async def _execute_rise_swap(self, wallet, normalized_network: str) -> bool:
+        """SWAP через Gaspump для Rise Testnet"""
+        try:
             if not self.router_contract:
                 self.logger.error("❌ Router contract not initialized")
                 return False
 
             self.logger.info(f"🔄 Starting random swap on Gaspump for {wallet.name}")
 
-            # ✅ ИСПОЛЬЗУЕМ НОРМАЛИЗОВАННОЕ ИМЯ СЕТИ ДЛЯ ПОЛУЧЕНИЯ ТОКЕНОВ
-            normalized_network = normalize_network_name(network_name)
             tokens = self.config.get_tokens_for_network(normalized_network)
             if not tokens:
                 self.logger.error(f"❌ No tokens configured for {normalized_network}")
                 return False
 
-            # ✅ ВЫБОР ТОКЕНОВ ДЛЯ RISE TESTNET
-            if is_rise_network(normalized_network):
-                available_symbols = ['ETH', 'WETH', 'USDC', 'USDT', 'RISE', 'WBTC', 'MOG', 'PEPE']
-            else:
-                available_symbols = ['PHRS', 'USDC', 'USDT']
+            available_symbols = ['ETH', 'WETH', 'USDC', 'USDT', 'RISE', 'WBTC', 'MOG', 'PEPE']
 
             available_tokens = {}
             for symbol, address in tokens.items():
@@ -441,7 +501,6 @@ class SwapService:
                 self.logger.error("❌ Not enough available tokens for swap")
                 return False
 
-            # Выбираем случайную пару
             token_symbols = list(available_tokens.keys())
             token_in_symbol, token_out_symbol = random.sample(token_symbols, 2)
             token_in_address = available_tokens[token_in_symbol]
@@ -449,17 +508,14 @@ class SwapService:
 
             self.logger.info(f"🎲 Selected swap pair: {token_in_symbol} -> {token_out_symbol}")
 
-            # Получаем баланс
             balance = await self.get_token_balance(wallet, token_in_address)
             if balance == 0:
                 self.logger.warning(f"⚠️ Zero balance for {token_in_symbol}")
                 return False
 
-            # Вычисляем сумму (0.5-2.5% от баланса)
             swap_percentage = Randomizer.get_random_percentage(0.5, 2.5)
             amount_in = int(balance * swap_percentage / 100)
 
-            # Минимальная сумма
             token_decimals = await self.get_token_decimals(token_in_address)
             min_amount = 10 ** (token_decimals - 3)  # 0.001 токена
 
@@ -474,11 +530,173 @@ class SwapService:
             self.logger.info(
                 f"💸 Swap amount: {amount_in_formatted} {token_in_symbol} ({swap_percentage:.2f}% of balance)")
 
-            # ✅ ВЫПОЛНЯЕМ SWAP
             return await self.execute_swap(wallet, token_in_address, token_out_address, amount_in)
 
         except Exception as e:
-            self.logger.error(f"❌ Random swap failed: {e}")
+            self.logger.error(f"❌ Rise swap failed: {e}")
+            return False
+
+    async def _execute_opn_swap(self, wallet, normalized_network: str) -> bool:
+        """SWAP/обертка для OPN Testnet"""
+        try:
+            if self.router_type != "iopn" or not self.router_address:
+                self.logger.error("❌ IOPN router is not configured")
+                return False
+
+            if not wallet.web3 or not wallet.web3.is_connected():
+                network_config = self.config.get_network_by_name(normalized_network)
+                if not network_config or not wallet.connect_to_network(network_config['rpc_url']):
+                    self.logger.error("❌ Wallet not connected to OPN network")
+                    return False
+
+            tokens = self.config.get_tokens_for_network(normalized_network)
+            if not tokens:
+                self.logger.error(f"❌ No tokens configured for {normalized_network}")
+                return False
+
+            wopn_address = tokens.get('WOPN')
+            if not wopn_address:
+                self.logger.error("❌ WOPN token address not configured")
+                return False
+
+            target_symbols = ['OPNT', 'WOPN', 'tUSDT', 'tBNB']
+            available_targets = [symbol for symbol in target_symbols if tokens.get(symbol)]
+            if not available_targets:
+                self.logger.error("❌ No target tokens configured for OPN swaps")
+                return False
+
+            balance = wallet.web3.eth.get_balance(wallet.address)
+            if balance <= 0:
+                self.logger.warning("⚠️ No OPN balance available for swap")
+                return False
+
+            gas_reserve = wallet.web3.to_wei(0.02, 'ether')
+            spendable_balance = max(balance - gas_reserve, 0)
+            if spendable_balance <= 0:
+                self.logger.warning("⚠️ Not enough balance to keep gas reserve on OPN")
+                return False
+
+            swap_percentage = random.uniform(3, 10) / 100
+            amount_in = int(balance * swap_percentage)
+            min_amount = wallet.web3.to_wei(0.001, 'ether')
+            if amount_in < min_amount:
+                amount_in = min_amount
+            if amount_in > spendable_balance:
+                amount_in = spendable_balance
+
+            if amount_in <= 0:
+                self.logger.warning("⚠️ Swap amount is below threshold after adjustments")
+                return False
+
+            target_symbol = random.choice(available_targets)
+            self.logger.info(
+                f"🎯 OPN swap target: {target_symbol}, amount: {wallet.web3.from_wei(amount_in, 'ether'):.6f} OPN")
+
+            if target_symbol == 'WOPN':
+                return await self._wrap_opn_to_wopn(wallet, wopn_address, amount_in)
+
+            target_address = tokens.get(target_symbol)
+            if not target_address:
+                self.logger.error(f"❌ Token address not configured for {target_symbol}")
+                return False
+
+            return await self._perform_opn_swap(wallet, amount_in, wopn_address, target_address, target_symbol)
+
+        except Exception as e:
+            self.logger.error(f"❌ OPN swap failed: {e}")
+            return False
+
+    async def _wrap_opn_to_wopn(self, wallet, wopn_address: str, amount_in: int) -> bool:
+        """Обертка OPN -> WOPN"""
+        try:
+            wopn_contract = self.web3.eth.contract(
+                address=Web3.to_checksum_address(wopn_address),
+                abi=self._get_wopn_abi()
+            )
+
+            gas_price = max(self.web3.eth.gas_price, self.web3.to_wei(7, 'gwei'))
+            transaction = wopn_contract.functions.deposit().build_transaction({
+                'from': wallet.address,
+                'value': amount_in,
+                'gas': 120000,
+                'gasPrice': gas_price,
+                'nonce': self.web3.eth.get_transaction_count(wallet.address),
+                'chainId': self.web3.eth.chain_id
+            })
+
+            signed_txn = wallet.account.sign_transaction(transaction)
+            tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
+
+            self.logger.info(f"📤 Wrapping OPN to WOPN: {tx_hash.hex()}")
+            receipt = await asyncio.to_thread(
+                self.web3.eth.wait_for_transaction_receipt,
+                tx_hash,
+                timeout=180
+            )
+
+            if receipt.status == 1:
+                self.logger.info(f"✅ Wrapped {self.web3.from_wei(amount_in, 'ether'):.6f} OPN to WOPN")
+                return True
+
+            self.logger.error("❌ Wrap transaction failed")
+            return False
+
+        except Exception as e:
+            self.logger.error(f"❌ Wrap to WOPN failed: {e}")
+            return False
+
+    async def _perform_opn_swap(self, wallet, amount_in: int, wopn_address: str,
+                                target_address: str, target_symbol: str) -> bool:
+        """Выполнение swapExactOPNForTokens"""
+        try:
+            if not self.router_contract:
+                self.logger.error("❌ Router contract not initialized for OPN swaps")
+                return False
+
+            gas_price = max(self.web3.eth.gas_price, self.web3.to_wei(7, 'gwei'))
+            deadline = self.web3.eth.get_block('latest')['timestamp'] + 1200
+            path = [
+                Web3.to_checksum_address(wopn_address),
+                Web3.to_checksum_address(target_address)
+            ]
+
+            transaction = self.router_contract.functions.swapExactOPNForTokens(
+                0,  # min amount disabled for тестовой сети
+                path,
+                wallet.address,
+                deadline
+            ).build_transaction({
+                'from': wallet.address,
+                'value': amount_in,
+                'gas': 500000,
+                'gasPrice': gas_price,
+                'nonce': self.web3.eth.get_transaction_count(wallet.address),
+                'chainId': self.web3.eth.chain_id
+            })
+
+            signed_txn = wallet.account.sign_transaction(transaction)
+            tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
+            self.logger.info(
+                f"📤 swapExactOPNForTokens sent: {tx_hash.hex()} ({target_symbol})")
+
+            receipt = await asyncio.to_thread(
+                self.web3.eth.wait_for_transaction_receipt,
+                tx_hash,
+                timeout=180
+            )
+
+            if receipt.status == 1:
+                self.logger.info(
+                    f"✅ OPN swap successful! "
+                    f"Spent {self.web3.from_wei(amount_in, 'ether'):.6f} OPN -> {target_symbol}"
+                )
+                return True
+
+            self.logger.error("❌ swapExactOPNForTokens reverted")
+            return False
+
+        except Exception as e:
+            self.logger.error(f"❌ Failed to execute swapExactOPNForTokens: {e}")
             return False
 
     def _get_token_symbol(self, token_address: str) -> str:

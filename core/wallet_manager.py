@@ -61,6 +61,7 @@ class Wallet:
                     self.logger.info(f"🔌 Using proxy for wallet {self.name}")
             else:
                 self.web3 = Web3(Web3.HTTPProvider(rpc_url))
+                ProxyManager.inject_poa_middleware(self.web3)
                 if self.logger:
                     self.logger.info(f"🔗 Direct connection for wallet {self.name}")
 
@@ -661,3 +662,130 @@ class WalletManager:
         except Exception as e:
             print(f"❌ Ошибка загрузки кошельков: {e}")
             return None
+
+    @staticmethod
+    def edit_wallet_proxy_interactive():
+        """Редактирование прокси настроек существующего кошелька"""
+        try:
+            with open('config/config.json', 'r') as f:
+                config = json.load(f)
+
+            wallets = config.get('wallets', [])
+            if not wallets:
+                print("❌ Кошельков нет для редактирования")
+                return
+
+            print("\n🔧 Изменение прокси кошелька")
+            print("=" * 40)
+
+            for idx, wallet in enumerate(wallets, 1):
+                proxy_status = wallet.get('proxy')
+                label = f"{wallet.get('name', 'unnamed')}"
+                if proxy_status:
+                    label += f" ({proxy_status.get('ip')}:{proxy_status.get('port')})"
+                else:
+                    label += " (без прокси)"
+                print(f"{idx}. {label}")
+
+            choice = secure_input("\nВыберите кошелек (номер) или Enter для отмены").strip()
+            if not choice:
+                return
+
+            if not choice.isdigit() or not (1 <= int(choice) <= len(wallets)):
+                print("❌ Неверный выбор")
+                return
+
+            selected_index = int(choice) - 1
+            wallet_entry = wallets[selected_index]
+            current_proxy = wallet_entry.get('proxy')
+
+            print(f"\n👜 Кошелек: {wallet_entry.get('name')}")
+            if current_proxy:
+                print(f"   Текущий прокси: {current_proxy.get('ip')}:{current_proxy.get('port')}")
+            else:
+                print("   Текущий прокси: отсутствует")
+
+            action = secure_input("Удалить прокси? (y/N)").strip().lower()
+            if action == 'y':
+                wallet_entry['proxy'] = None
+            else:
+                new_proxy = current_proxy.copy() if current_proxy else {}
+
+                def prompt_ip(default_value):
+                    while True:
+                        prompt = f"IP адрес [{default_value}] " if default_value else "IP адрес "
+                        value = secure_input(prompt).strip()
+                        if not value:
+                            if default_value:
+                                return default_value
+                            else:
+                                print("❌ IP не может быть пустым")
+                                continue
+                        if validate_ip_address(value):
+                            return value
+                        print("❌ Невалидный IP. Пример: 192.168.1.1")
+
+                def prompt_port(default_value):
+                    while True:
+                        prompt = f"Порт [{default_value}] " if default_value else "Порт "
+                        value = secure_input(prompt).strip()
+                        if not value:
+                            if default_value:
+                                return default_value
+                            else:
+                                print("❌ Порт обязателен")
+                                continue
+                        if validate_port(value):
+                            return value
+                        print("❌ Неверный порт. Допустимо: 1-65535")
+
+                current_ip = current_proxy.get('ip') if current_proxy else None
+                current_port = current_proxy.get('port') if current_proxy else None
+                current_username = current_proxy.get('username') if current_proxy else ""
+                current_password = current_proxy.get('password') if current_proxy else ""
+
+                new_proxy['ip'] = prompt_ip(current_ip)
+                new_proxy['port'] = prompt_port(current_port)
+                username_prompt = f"Логин [{current_username or 'опционально'}] (введите '-' чтобы удалить)"
+                username = secure_input(username_prompt).strip()
+                if username == '-':
+                    new_proxy.pop('username', None)
+                    new_proxy.pop('password', None)
+                elif username:
+                    new_proxy['username'] = username
+                    password_prompt = "Пароль (оставьте пустым чтобы не менять)" if current_password else "Пароль"
+                    password = safe_getpass(password_prompt)
+                    if password:
+                        new_proxy['password'] = password
+                    elif current_password:
+                        new_proxy['password'] = current_password
+                    else:
+                        new_proxy.pop('password', None)
+                else:
+                    if current_username:
+                        new_proxy['username'] = current_username
+                        if current_password:
+                            new_proxy['password'] = current_password
+                        else:
+                            new_proxy.pop('password', None)
+                    else:
+                        new_proxy.pop('username', None)
+                        new_proxy.pop('password', None)
+
+                wallet_entry['proxy'] = new_proxy
+
+            confirm = secure_input("\nСохранить изменения? (y/N)").strip().lower()
+            if confirm != 'y':
+                print("❌ Изменения отменены")
+                return
+
+            wallets[selected_index] = wallet_entry
+            config['wallets'] = wallets
+
+            with open('config/config.json', 'w') as f:
+                json.dump(config, f, indent=2)
+
+            print("✅ Прокси успешно обновлен")
+
+        except Exception as e:
+            print(f"❌ Ошибка при обновлении прокси: {e}")

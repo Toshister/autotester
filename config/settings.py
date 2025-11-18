@@ -242,6 +242,25 @@ class Config:
                     "contracts": {
                         "gaspump_router": "0x5eC9BEaCe4a0f46F77945D54511e2b454cb8F38E"
                     }
+                },
+                {
+                    "name": "OPN Testnet",
+                    "rpc_url": "https://testnet-rpc.iopn.tech",
+                    "explorer": "https://testnet.iopn.tech",
+                    "chain_id": 984,
+                    "native_token": "OPN",
+                    "tokens": {
+                        "OPN": "0x0000000000000000000000000000000000000000",
+                        "USDC": "0x3600000000000000000000000000000000000000",
+                        "EURC": "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
+                        "tBNB": "0x92cF36713a5622351c9489D5556B90B321873607",
+                        "WOPN": "0xBc022C9dEb5AF250A526321d16Ef52E39b4DBD84",
+                        "tUSDT": "0x3e01b4d892E0D0A219eF8BBe7e260a6bc8d9B31b",
+                        "OPNT": "0x2aEc1Db9197Ff284011A6A1d0752AD03F5782B0d"
+                    },
+                    "contracts": {
+                        "iopn_router": "0xb489bce5c9c9364da2d1d1bc5ce4274f63141885"
+                    }
                 }
             ],
             "operations": {
