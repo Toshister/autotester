@@ -58,12 +58,12 @@ class Wallet:
             if self.proxy_manager:
                 self.web3 = self.proxy_manager.create_web3_instance(rpc_url)
                 if self.logger:
-                    self.logger.info(f"🔌 Using proxy for wallet {self.name}")
+                    self.logger.debug(f"🔌 Using proxy for wallet {self.name}")
             else:
                 self.web3 = Web3(Web3.HTTPProvider(rpc_url))
                 ProxyManager.inject_poa_middleware(self.web3)
                 if self.logger:
-                    self.logger.info(f"🔗 Direct connection for wallet {self.name}")
+                    self.logger.debug(f"🔗 Direct connection for wallet {self.name}")
 
             is_connected = self.web3.is_connected()
 
@@ -131,7 +131,7 @@ class WalletManager:
         self.web3_instances[network['name']] = web3
         return web3
 
-    async def initialize_wallet_connections(self, specific_wallets=None):
+    async def initialize_wallet_connections(self, specific_wallets=None, specific_networks=None):
         """Параллельная инициализация подключений кошельков с фильтрацией"""
         tasks = []
 
@@ -139,10 +139,20 @@ class WalletManager:
         wallets_to_connect = self.wallets
         if specific_wallets:
             wallets_to_connect = [wallet for wallet in self.wallets if wallet.name in specific_wallets]
-            self.logger.info(f"🔌 Connecting only selected wallets: {[w.name for w in wallets_to_connect]}")
+            self.logger.debug(f"🔌 Connecting only selected wallets: {[w.name for w in wallets_to_connect]}")
+
+        networks_to_use = self.config.networks
+        if specific_networks:
+            normalized_targets = {name.lower() for name in specific_networks}
+            networks_to_use = [
+                n for n in self.config.networks
+                if n['name'].lower() in normalized_targets
+                or n['name'].lower().replace(' ', '') in {t.replace(' ', '') for t in normalized_targets}
+            ]
+            self.logger.debug(f"🌐 Limiting wallet connections to networks: {[n['name'] for n in networks_to_use]}")
 
         for wallet in wallets_to_connect:
-            for network in self.config.networks:
+            for network in networks_to_use:
                 task = asyncio.create_task(self._connect_wallet_to_network(wallet, network))
                 tasks.append(task)
 
@@ -321,9 +331,9 @@ class WalletManager:
                     # ✅ ТОЛЬКО ЛОГИРУЕМ ИНФОРМАЦИЮ О ПРОКСИ БЕЗ ПОДКЛЮЧЕНИЯ
                     if wallet.proxy_manager:
                         proxy_ip = wallet.proxy_manager.proxy_config.get('ip', 'unknown')
-                        self.logger.info(f"🔌 Wallet {wallet.name} has proxy: {proxy_ip}")
+                        self.logger.debug(f"🔌 Wallet {wallet.name} has proxy: {proxy_ip}")
                     else:
-                        self.logger.info(f"🔗 Wallet {wallet.name} - direct connection")
+                        self.logger.debug(f"🔗 Wallet {wallet.name} - direct connection")
 
                 self.wallets.append(wallet)
 

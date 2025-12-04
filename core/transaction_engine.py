@@ -6,10 +6,11 @@ from web3 import Web3
 from services.transfer_service import TransferService
 from services.swap_service import SwapService
 from services.subscription_service import SubscriptionService
+from services.staking_service import StakingService
 from core.gas_monitor import GasMonitor
 from utils.randomizer import Randomizer
 from utils.logger import setup_logger
-from config.constants import normalize_network_name, is_pharos_network, is_rise_network, is_opn_network
+from config.constants import normalize_network_name, is_pharos_network, is_rise_network, is_opn_network, is_arc_network
 
 
 class TransactionEngine:
@@ -38,7 +39,8 @@ class TransactionEngine:
         self.operation_weights = {
             'transfer': 0,
             'swap': 0,
-            'subscribe': 0
+            'subscribe': 0,
+            'stake': 0
         }
 
     def set_network_operation_weights(self, network_name: str):
@@ -47,45 +49,70 @@ class TransactionEngine:
         normalized_network = normalize_network_name(network_name)
 
         if is_pharos_network(normalized_network):
-            # Для Pharos - только subscribe
+            # Для Pharos - subscribe и staking поровну
             self.operation_weights = {
                 'transfer': 0,
                 'swap': 0,
-                'subscribe': 100
+                'subscribe': 50,
+                'stake': 50
             }
-            self.logger.info(f"🎯 Set operation weights for {normalized_network}: Subscribe only")
+            self.logger.info(f"🎯 Set operation weights for {normalized_network}: Subscribe & Stake")
 
         elif is_rise_network(normalized_network):
             # Для Rise Testnet - transfer и swap
             self.operation_weights = {
                 'transfer': 50,
                 'swap': 50,
-                'subscribe': 0
+                'subscribe': 0,
+                'stake': 0
             }
             self.logger.info(f"🎯 Set operation weights for {normalized_network}: Transfer & Swap")
 
         elif is_opn_network(normalized_network):
             self.operation_weights = {
-                'transfer': 60,
-                'swap': 40,
-                'subscribe': 0
+                'transfer': 30,
+                'swap': 70,
+                'subscribe': 0,
+                'stake': 0
             }
             self.logger.info(f"🎯 Set operation weights for {normalized_network}: Transfer & Swap")
+
+        elif is_arc_network(normalized_network):
+            self.operation_weights = {
+                'transfer': 20,
+                'swap': 80,
+                'subscribe': 0,
+                'stake': 0
+            }
+            self.logger.info(f"🎯 Set operation weights for {normalized_network}: Swap-focused")
 
         else:
             # Для других сетей - стандартные веса
             self.operation_weights = {
                 'transfer': 50,
                 'swap': 30,
-                'subscribe': 20
+                'subscribe': 20,
+                'stake': 0
             }
             self.logger.info(f"🎯 Set operation weights for {normalized_network}: Mixed operations")
 
-    async def initialize_services(self):
-        """Инициализация сервисов для всех сетей"""
-        self.logger.info("🔄 Initializing services for all networks...")
+    async def initialize_services(self, target_network: str = None):
+        """Инициализация сервисов (можно ограничить конкретной сетью)"""
+        self.logger.info("🔄 Initializing services...")
 
-        for network in self.config.networks:
+        networks_to_init = self.config.networks
+        if target_network:
+            normalized_target = normalize_network_name(target_network)
+            filtered = [
+                n for n in self.config.networks
+                if normalize_network_name(n['name']) == normalized_target
+            ]
+            if filtered:
+                networks_to_init = filtered
+            else:
+                self.logger.warning(f"⚠️ Target network '{target_network}' not found, initializing all")
+
+        for network in networks_to_init:
             try:
                 # Создаем Web3 instance для сети
                 web3_instance = Web3(Web3.HTTPProvider(network['rpc_url']))
@@ -94,7 +121,8 @@ class TransactionEngine:
                 self.services[network['name']] = {
                     'transfer': TransferService(web3_instance, self.config, self.gas_monitor),
                     'swap': SwapService(web3_instance, self.config, self.gas_monitor),
-                    'subscribe': SubscriptionService(web3_instance, self.config, self.gas_monitor)
+                    'subscribe': SubscriptionService(web3_instance, self.config, self.gas_monitor),
+                    'stake': StakingService(web3_instance, self.config)
                 }
                 self.logger.info(f"✅ Services initialized for {network['name']}")
 
@@ -110,7 +138,8 @@ class TransactionEngine:
                 'total_gas_used': 0,
                 'transfers': 0,
                 'swaps': 0,
-                'subscriptions': 0
+                'subscriptions': 0,
+                'stakes': 0
             }
 
         self.start_monitoring()
@@ -219,6 +248,15 @@ class TransactionEngine:
                 else:
                     self.logger.error("❌ Subscription service not available")
 
+            elif operation_type == 'stake':
+                self.logger.info(f"🎲 Selected operation: STAKE")
+                service = self.services.get(network_name, {}).get('stake')
+                if service:
+                    self.wallet_stats[wallet.name]['stakes'] += 1
+                    success = await service.execute_random_stake(wallet, network_name)
+                else:
+                    self.logger.error("❌ Staking service not available")
+
             # ✅ ОБНОВЛЯЕМ СТАТИСТИКУ ПОСЛЕ выполнения
             if success:
                 self.real_time_stats['successful_operations'] += 1
@@ -269,8 +307,8 @@ class TransactionEngine:
                     # ✅ ОБНОВЛЯЕМ СТАТИСТИКУ В РЕАЛЬНОМ ВРЕМЕНИ
                     self._recalculate_real_time_stats()
 
-                    # ✅ СЛУЧАЙНАЯ ЗАДЕРЖКА ОТ 15 СЕКУНД ДО 2 МИНУТ
-                    delay_seconds = random.randint(15, 120)
+                    # ✅ СЛУЧАЙНАЯ ЗАДЕРЖКА ОТ 15 ДО 25 СЕКУНД
+                    delay_seconds = random.randint(15, 25)
                     self.logger.info(f"⏳ Waiting {delay_seconds} seconds before next operation...")
                     await asyncio.sleep(delay_seconds)
 
@@ -310,7 +348,8 @@ class TransactionEngine:
                 f"   {wallet_name}: {stats['successful_operations']}/{stats['total_operations']} "
                 f"({success_rate:.1f}%) | Transfers: {stats.get('transfers', 0)} | "
                 f"Swaps: {stats.get('swaps', 0)} | "
-                f"Subscriptions: {stats.get('subscriptions', 0)}"
+                f"Subscriptions: {stats.get('subscriptions', 0)} | "
+                f"Stakes: {stats.get('stakes', 0)}"
             )
 
     def get_wallet_statistics(self) -> dict:
@@ -354,6 +393,13 @@ class TransactionEngine:
                     success = await service.execute_random_subscription(wallet, network_name)
                 else:
                     self.logger.error("❌ Subscription service not available")
+
+            elif operation_type == 'stake':
+                service = self.services.get(network_name, {}).get('stake')
+                if service:
+                    success = await service.execute_random_stake(wallet, network_name)
+                else:
+                    self.logger.error("❌ Staking service not available")
 
             else:
                 self.logger.error(f"❌ Unknown operation type: {operation_type}")

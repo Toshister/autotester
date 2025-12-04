@@ -43,17 +43,17 @@ class EVMAutoTester:
                 wallet for wallet in self.wallet_manager.wallets
                 if wallet.name in wallet_names
             ]
-            self.logger.info(f"✅ Selected {len(self.wallet_manager.wallets)} out of {original_count} wallets")
+            self.logger.debug(f"✅ Selected {len(self.wallet_manager.wallets)} out of {original_count} wallets")
 
         if not self.wallet_manager.wallets:
             self.logger.error("❌ No wallets available for operation")
             return False
 
         # ✅ ВТОРОЙ ШАГ: Инициализируем подключения ТОЛЬКО выбранных кошельков
-        await self.wallet_manager.initialize_wallet_connections(wallet_names)
+        await self.wallet_manager.initialize_wallet_connections(wallet_names, [target_network] if target_network else None)
 
         # ✅ ТРЕТИЙ ШАГ: Инициализируем сервисы
-        await self.transaction_engine.initialize_services()
+        await self.transaction_engine.initialize_services(target_network)
 
         # ✅ ЧЕТВЕРТЫЙ ШАГ: Устанавливаем веса операций для целевой сети
         if target_network:
@@ -252,8 +252,8 @@ async def execute_operations_in_network(app, selected_network, transaction_count
             if success:
                 successful_operations += 1
 
-            # ✅ СЛУЧАЙНАЯ ПАУЗА МЕЖДУ ОПЕРАЦИЯМИ (15-120 СЕКУНД)
-            delay_seconds = random.randint(15, 120)
+            # ✅ СЛУЧАЙНАЯ ПАУЗА МЕЖДУ ОПЕРАЦИЯМИ (15-25 СЕКУНД)
+            delay_seconds = random.randint(15, 25)
             print(f"⏳ Ожидание {delay_seconds} секунд перед следующей операцией...")
             await asyncio.sleep(delay_seconds)
 
@@ -343,6 +343,33 @@ def check_balance_menu():
     except Exception as e:
         print(f"❌ Ошибка в меню проверки баланса: {e}")
 
+
+def wallet_management_menu():
+    """Подменю управления кошельками"""
+    while True:
+        print("\n🎒 Управление кошельками")
+        print("=" * 40)
+        print("1. ➕ Добавить новый кошелек")
+        print("2. 📋 Показать информацию о кошельках")
+        print("3. 💰 Проверить баланс кошельков")
+        print("4. 🔧 Изменить прокси кошельков")
+        print("5. ↩️ Назад")
+
+        choice = secure_input("\nВыберите действие (1-5): ").strip()
+
+        if choice == "1":
+            WalletManager.add_wallet_interactive()
+        elif choice == "2":
+            WalletManager.show_wallet_info()
+        elif choice == "3":
+            check_balance_menu()
+        elif choice == "4":
+            WalletManager.edit_wallet_proxy_interactive()
+        elif choice == "5":
+            break
+        else:
+            print("❌ Неверный выбор. Попробуйте еще раз.")
+
 def network_management_menu():
     """Меню управления сетями"""
     from core.network_manager import NetworkManager
@@ -396,17 +423,20 @@ def main_menu():
     while True:
         print("\n🚀 EVM Auto Tester - Меню запуска")
         print("=" * 40)
-        print("1. 🎯 Начать отправку транзакций")
-        print("2. 📝 Добавить новый кошелек")
-        print("3. 📋 Показать информацию о кошельках")
-        print("4. 💰 Проверить баланс кошельков")
-        print("5. 🌐 Управление сетями и токенами")
-        print("6. 🔧 Изменить прокси кошельков")
-        print("7. 🚪 Выход")
+        print("1. 🎒 Управление кошельками")
+        print("2. 🌐 Управление сетями и токенами")
+        print("3. 🎯 Начать отправку транзакций")
+        print("4. 🚪 Выход")
 
-        choice = secure_input("\nВыберите действие (1-7): ").strip()
+        choice = secure_input("\nВыберите действие (1-4): ").strip()
 
         if choice == "1":
+            wallet_management_menu()
+
+        elif choice == "2":
+            network_management_menu()
+
+        elif choice == "3":
             # Получаем все настройки
             network, wallets, count = get_operation_settings()
 
@@ -431,17 +461,7 @@ def main_menu():
                 # Пауза перед возвратом в меню
                 input("\n↵ Нажмите Enter чтобы продолжить...")
 
-        elif choice == "2":
-            WalletManager.add_wallet_interactive()
-        elif choice == "3":
-            WalletManager.show_wallet_info()
         elif choice == "4":
-            check_balance_menu()
-        elif choice == "5":
-            network_management_menu()
-        elif choice == "6":
-            WalletManager.edit_wallet_proxy_interactive()
-        elif choice == "7":
             print("👋 До свидания!")
             break
         else:

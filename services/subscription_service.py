@@ -1,404 +1,360 @@
 import asyncio
 import random
+from dataclasses import dataclass
+from decimal import Decimal, ROUND_DOWN, getcontext
+from typing import List, Optional, Tuple
+
 from web3 import Web3
-from utils.logger import setup_logger
+
 from config.constants import is_pharos_network, normalize_network_name
-from utils.randomizer import Randomizer
+from utils.logger import setup_logger
+
+# Higher precision is useful when converting token amounts to wei
+getcontext().prec = 36
+
+
+@dataclass
+class SubscriptionAsset:
+    name: str
+    symbol: str
+    token_address: str
+    asset_id: str
+    decimals: int = 18
+    min_amount: float = 0.0
+    max_amount: float = 0.0
 
 
 class SubscriptionService:
+    SUBSCRIBE_SELECTOR = "0xef272020"  # subscribe(bytes32,uint256)
+    MAX_ALLOWANCE = 2 ** 256 - 1
+
     def __init__(self, web3_instance, config, gas_monitor=None):
         self.web3 = web3_instance
         self.config = config
         self.gas_monitor = gas_monitor
         self.logger = setup_logger("SubscriptionService")
 
-        # ✅ Адреса контрактов для CashPlus Atlantic
-        self.usdt_address = "0xE7E84B8B4f39C507499c40B4ac199B050e2882d5"  # USDT на Pharos
-        self.cashplus_contract_address = "0x56f4add11d723412d27a9e9433315401b351d6e3"  # CashPlus Atlantic
+        self.subscription_settings = self.config.get_subscription_settings()
+        self.subscription_contract = self._get_subscription_contract()
+        self.assets: List[SubscriptionAsset] = self._load_assets()
 
-        # ABI для контрактов
-        self.usdt_abi = self._get_usdt_abi()
-        self.cashplus_abi = self._get_cashplus_abi()
-
-        # ✅ ТРЕКИНГ ТРАНЗАКЦИЙ ДЛЯ КОШЕЛЬКОВ
+        self.erc20_abi = self._erc20_abi()
         self.wallet_transaction_count = {}
 
-    def _get_usdt_abi(self):
-        """ABI для USDT токена"""
+    @staticmethod
+    def _erc20_abi():
         return [
             {
                 "constant": True,
                 "inputs": [{"name": "_owner", "type": "address"}],
                 "name": "balanceOf",
                 "outputs": [{"name": "balance", "type": "uint256"}],
-                "type": "function"
-            },
-            {
-                "constant": False,
-                "inputs": [
-                    {"name": "_spender", "type": "address"},
-                    {"name": "_value", "type": "uint256"}
-                ],
-                "name": "approve",
-                "outputs": [{"name": "success", "type": "bool"}],
-                "type": "function"
+                "type": "function",
             },
             {
                 "constant": True,
                 "inputs": [],
                 "name": "decimals",
                 "outputs": [{"name": "", "type": "uint8"}],
-                "type": "function"
+                "type": "function",
             },
             {
                 "constant": True,
                 "inputs": [],
                 "name": "symbol",
                 "outputs": [{"name": "", "type": "string"}],
-                "type": "function"
+                "type": "function",
+            },
+            {
+                "constant": False,
+                "inputs": [
+                    {"name": "_spender", "type": "address"},
+                    {"name": "_value", "type": "uint256"},
+                ],
+                "name": "approve",
+                "outputs": [{"name": "success", "type": "bool"}],
+                "type": "function",
             },
             {
                 "constant": True,
                 "inputs": [
                     {"name": "_owner", "type": "address"},
-                    {"name": "_spender", "type": "address"}
+                    {"name": "_spender", "type": "address"},
                 ],
                 "name": "allowance",
                 "outputs": [{"name": "", "type": "uint256"}],
-                "type": "function"
-            }
+                "type": "function",
+            },
         ]
 
-    def _get_cashplus_abi(self):
-        """ABI для CashPlus Atlantic контракта"""
-        return [
-            {
-                "inputs": [
-                    {"internalType": "address", "name": "uAddress", "type": "address"},
-                    {"internalType": "uint256", "name": "uAmount", "type": "uint256"}
-                ],
-                "name": "subscribe",
-                "outputs": [],
-                "stateMutability": "nonpayable",
-                "type": "function"
-            },
-            {
-                "inputs": [
-                    {"internalType": "address", "name": "uAddress", "type": "address"}
-                ],
-                "name": "unsubscribe",
-                "outputs": [],
-                "stateMutability": "nonpayable",
-                "type": "function"
-            },
-            {
-                "inputs": [
-                    {"internalType": "address", "name": "user", "type": "address"},
-                    {"internalType": "address", "name": "token", "type": "address"}
-                ],
-                "name": "getUserSubscription",
-                "outputs": [
-                    {"internalType": "uint256", "name": "amount", "type": "uint256"},
-                    {"internalType": "uint256", "name": "startTime", "type": "uint256"}
-                ],
-                "stateMutability": "view",
-                "type": "function"
-            }
-        ]
+    def _get_subscription_contract(self) -> Optional[str]:
+        """Locate subscription contract address from settings or network contracts."""
+        direct = self.subscription_settings.get("contract_address")
+        if direct:
+            return Web3.to_checksum_address(direct)
+
+        pharos = self.config.get_network_by_name("Pharos Atlantic")
+        if pharos and "contracts" in pharos:
+            addr = pharos["contracts"].get("structure_subscription")
+            if addr:
+                return Web3.to_checksum_address(addr)
+
+        self.logger.error("No subscription contract address configured for Pharos Atlantic")
+        return None
+
+    def _load_assets(self) -> List[SubscriptionAsset]:
+        """Load subscription assets from config and normalise addresses."""
+        assets_config = self.subscription_settings.get("assets", [])
+        assets: List[SubscriptionAsset] = []
+
+        for raw in assets_config:
+            try:
+                asset_id = raw.get("asset_id")
+                token_address = raw.get("token_address")
+                if not asset_id or not token_address:
+                    continue
+
+                name = raw.get("name", "Unknown")
+                symbol = raw.get("symbol", "")
+                decimals = raw.get("decimals", 18)
+                min_amount = float(raw.get("min_amount", 0))
+                max_amount = float(raw.get("max_amount", 0))
+
+                checksum_token = Web3.to_checksum_address(token_address)
+                asset_id_hex = asset_id if asset_id.startswith("0x") else f"0x{asset_id}"
+
+                assets.append(
+                    SubscriptionAsset(
+                        name=name,
+                        symbol=symbol,
+                        token_address=checksum_token,
+                        asset_id=asset_id_hex,
+                        decimals=decimals,
+                        min_amount=min_amount,
+                        max_amount=max_amount,
+                    )
+                )
+            except Exception as exc:
+                self.logger.error(f"Failed to load asset config {raw}: {exc}")
+
+        if not assets:
+            self.logger.error("No subscription assets configured")
+        return assets
 
     async def get_wallet_transaction_count(self, wallet_address: str) -> int:
-        """✅ ПОЛУЧЕНИЕ КОЛИЧЕСТВА ТРАНЗАКЦИЙ КОШЕЛЬКА"""
+        """Return known transaction count for the wallet (on-chain or tracked)."""
         try:
-            # Используем web3 для получения nonce (количество отправленных транзакций)
-            transaction_count = self.web3.eth.get_transaction_count(wallet_address)
-
-            # Также проверяем наш внутренний счетчик
-            internal_count = self.wallet_transaction_count.get(wallet_address.lower(), 0)
-
-            # Используем максимум из двух значений
-            total_count = max(transaction_count, internal_count)
-
-            self.logger.info(f"📊 Wallet {wallet_address[:8]}... transaction count: {total_count}")
-            return total_count
-
-        except Exception as e:
-            self.logger.error(f"❌ Error getting transaction count for {wallet_address[:8]}...: {e}")
+            onchain = self.web3.eth.get_transaction_count(wallet_address)
+            tracked = self.wallet_transaction_count.get(wallet_address.lower(), 0)
+            return max(onchain, tracked)
+        except Exception as exc:
+            self.logger.error(f"Error reading nonce for {wallet_address}: {exc}")
             return self.wallet_transaction_count.get(wallet_address.lower(), 0)
 
     def _increment_wallet_transaction_count(self, wallet_address: str):
-        """✅ УВЕЛИЧЕНИЕ СЧЕТЧИКА ТРАНЗАКЦИЙ ДЛЯ КОШЕЛЬКА"""
-        wallet_key = wallet_address.lower()
-        current_count = self.wallet_transaction_count.get(wallet_key, 0)
-        self.wallet_transaction_count[wallet_key] = current_count + 1
-        self.logger.info(f"📈 Updated transaction count for {wallet_address[:8]}...: {current_count + 1}")
+        key = wallet_address.lower()
+        current = self.wallet_transaction_count.get(key, 0)
+        self.wallet_transaction_count[key] = current + 1
 
-    async def check_transaction_limit(self, wallet, max_transactions: int = 100) -> bool:
-        """✅ ПРОВЕРКА ЛИМИТА ТРАНЗАКЦИЙ ДЛЯ КОШЕЛЬКА"""
+    async def check_transaction_limit(self, wallet, max_transactions: int) -> bool:
         try:
-            transaction_count = await self.get_wallet_transaction_count(wallet.address)
-
-            if transaction_count >= max_transactions:
+            count = await self.get_wallet_transaction_count(wallet.address)
+            if count >= max_transactions:
                 self.logger.warning(
-                    f"⏭️ Skipping {wallet.name} - transaction limit reached: {transaction_count}/{max_transactions}")
+                    f"Skipping {wallet.name}: transaction limit reached {count}/{max_transactions}"
+                )
                 return False
-            else:
-                self.logger.info(f"✅ {wallet.name} transaction count: {transaction_count}/{max_transactions}")
+            return True
+        except Exception as exc:
+            self.logger.error(f"Transaction limit check failed for {wallet.name}: {exc}")
+            return True
+
+    def _to_wei(self, amount: float, decimals: int) -> int:
+        quantized = Decimal(str(amount)).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
+        wei_value = quantized * (Decimal(10) ** decimals)
+        return int(wei_value.to_integral_value(rounding=ROUND_DOWN))
+
+    async def _get_token_decimals(self, asset: SubscriptionAsset) -> int:
+        if asset.decimals:
+            return asset.decimals
+        try:
+            contract = self.web3.eth.contract(address=asset.token_address, abi=self.erc20_abi)
+            decimals = contract.functions.decimals().call()
+            asset.decimals = decimals
+            return decimals
+        except Exception as exc:
+            self.logger.error(f"Failed to fetch decimals for {asset.symbol}: {exc}")
+            return 18
+
+    async def _get_token_balance(
+        self, wallet, asset: SubscriptionAsset, decimals: int
+    ) -> Tuple[float, int]:
+        try:
+            contract = self.web3.eth.contract(address=asset.token_address, abi=self.erc20_abi)
+            raw_balance = contract.functions.balanceOf(wallet.address).call()
+            readable = raw_balance / (10 ** decimals)
+            return float(readable), raw_balance
+        except Exception as exc:
+            self.logger.error(f"Failed to fetch balance for {asset.symbol}: {exc}")
+            return 0.0, 0
+
+    def _choose_amount(self, asset: SubscriptionAsset, balance: float) -> Optional[float]:
+        pct_cap = self.subscription_settings.get("max_percentage_of_balance", 100)
+        max_by_balance = balance * (pct_cap / 100)
+        upper = min(asset.max_amount, max_by_balance)
+        lower = asset.min_amount
+
+        if upper <= 0 or upper < lower:
+            return None
+
+        # Randomize precision between 0.1 and 0.001
+        precision = random.choice([Decimal("0.1"), Decimal("0.01"), Decimal("0.001")])
+        amount = Decimal(random.uniform(lower, upper)).quantize(precision, rounding=ROUND_DOWN)
+        if amount <= 0:
+            return None
+        return float(amount)
+
+    async def _ensure_allowance(
+        self, wallet, asset: SubscriptionAsset, amount_wei: int
+    ) -> bool:
+        try:
+            contract = self.web3.eth.contract(address=asset.token_address, abi=self.erc20_abi)
+            allowance = contract.functions.allowance(wallet.address, self.subscription_contract).call()
+            if allowance >= amount_wei:
                 return True
 
-        except Exception as e:
-            self.logger.error(f"❌ Error checking transaction limit for {wallet.name}: {e}")
-            return True  # Разрешаем если ошибка проверки
-
-    async def get_usdt_balance(self, wallet) -> float:
-        """Получение баланса USDT в долларах с правильными decimals"""
-        try:
-            usdt_contract = self.web3.eth.contract(
-                address=Web3.to_checksum_address(self.usdt_address),
-                abi=self.usdt_abi
-            )
-
-            balance_wei = usdt_contract.functions.balanceOf(wallet.address).call()
-            decimals = usdt_contract.functions.decimals().call()
-
-            # ✅ USDT обычно имеет 6 decimals, но проверим
-            balance_usd = balance_wei / (10 ** decimals)
-
-            # Получаем символ токена для логирования
-            try:
-                symbol = usdt_contract.functions.symbol().call()
-            except:
-                symbol = "USDT"
-
-            self.logger.info(f"💰 {wallet.name} {symbol} баланс: {balance_usd:.4f} {symbol} (decimals: {decimals})")
-            return balance_usd
-
-        except Exception as e:
-            self.logger.error(f"❌ Ошибка получения баланса USDT для {wallet.name}: {e}")
-            return 0.0
-
-    async def get_native_balance(self, wallet) -> float:
-        """Получение баланса нативного токена (PHRS) с использованием конфига"""
-        try:
-            balance_wei = self.web3.eth.get_balance(wallet.address)
-            balance_native = self.web3.from_wei(balance_wei, 'ether')
-
-            # ✅ ПОЛУЧАЕМ ИНФОРМАЦИЮ ИЗ КОНФИГА
-            normalized_network = normalize_network_name('Pharos Atlantic')
-            network_config = self.config.get_network_by_name(normalized_network)
-
-            if network_config:
-                native_token = network_config.get('native_token', 'PHRS')
-                self.logger.info(f"💰 {wallet.name} {native_token} баланс: {balance_native:.6f} {native_token}")
-            else:
-                self.logger.info(f"💰 {wallet.name} native баланс: {balance_native:.6f} PHRS")
-
-            return float(balance_native)
-
-        except Exception as e:
-            self.logger.error(f"❌ Ошибка получения нативного баланса для {wallet.name}: {e}")
-            return 0.0
-
-    async def check_allowance(self, wallet, spender: str) -> int:
-        """Проверка allowance для USDT"""
-        try:
-            usdt_contract = self.web3.eth.contract(
-                address=Web3.to_checksum_address(self.usdt_address),
-                abi=self.usdt_abi
-            )
-
-            allowance = usdt_contract.functions.allowance(
-                wallet.address,
-                Web3.to_checksum_address(spender)
-            ).call()
-
-            return allowance
-
-        except Exception as e:
-            self.logger.error(f"❌ Ошибка проверки allowance для {wallet.name}: {e}")
-            return 0
-
-    async def approve_usdt(self, wallet, spender: str, amount: int) -> bool:
-        """Approve USDT для CashPlus контракта"""
-        try:
-            usdt_contract = self.web3.eth.contract(
-                address=Web3.to_checksum_address(self.usdt_address),
-                abi=self.usdt_abi
-            )
-
             nonce = self.web3.eth.get_transaction_count(wallet.address)
+            gas_limit = self.subscription_settings.get("approve_gas_limit", 120000)
+            gas_price = self.web3.eth.gas_price
 
-            transaction = usdt_contract.functions.approve(
-                Web3.to_checksum_address(spender),
-                amount
-            ).build_transaction({
-                'from': wallet.address,
-                'gas': 100000,
-                'gasPrice': self.web3.eth.gas_price,
-                'nonce': nonce,
-                'chainId': self.web3.eth.chain_id
-            })
+            tx = contract.functions.approve(
+                self.subscription_contract, self.MAX_ALLOWANCE
+            ).build_transaction(
+                {
+                    "from": wallet.address,
+                    "gas": gas_limit,
+                    "maxFeePerGas": gas_price,
+                    "maxPriorityFeePerGas": gas_price,
+                    "nonce": nonce,
+                    "chainId": self.web3.eth.chain_id,
+                }
+            )
 
-            signed_txn = wallet.account.sign_transaction(transaction)
-            tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
-
-            self.logger.info(f"📝 Approval transaction sent for {wallet.name}: {tx_hash.hex()}")
+            signed = wallet.account.sign_transaction(tx)
+            tx_hash = self.web3.eth.send_raw_transaction(signed.raw_transaction)
+            self.logger.info(f"{wallet.name}: approval sent for {asset.symbol} ({tx_hash.hex()})")
 
             receipt = await asyncio.to_thread(
-                self.web3.eth.wait_for_transaction_receipt,
-                tx_hash,
-                timeout=120
+                self.web3.eth.wait_for_transaction_receipt, tx_hash, timeout=180
             )
-
             if receipt.status == 1:
-                # ✅ УВЕЛИЧИВАЕМ СЧЕТЧИК ТРАНЗАКЦИЙ ПРИ УСПЕШНОМ APPROVE
                 self._increment_wallet_transaction_count(wallet.address)
-
-            return receipt.status == 1
-
-        except Exception as e:
-            self.logger.error(f"❌ Approval failed for {wallet.name}: {e}")
-            return False
-
-    async def execute_subscribe(self, wallet, amount_usd: float) -> bool:
-        """Выполнение подписки на указанную сумму"""
-        try:
-            # Получаем контракт CashPlus
-            cashplus_contract = self.web3.eth.contract(
-                address=Web3.to_checksum_address(self.cashplus_contract_address),
-                abi=self.cashplus_abi
-            )
-
-            # Конвертируем USD в USDT (предполагаем 1:1)
-            usdt_contract = self.web3.eth.contract(
-                address=Web3.to_checksum_address(self.usdt_address),
-                abi=self.usdt_abi
-            )
-
-            decimals = usdt_contract.functions.decimals().call()
-            amount_wei = int(amount_usd * (10 ** decimals))
-
-            self.logger.info(f"🎯 {wallet.name} subscribing: {amount_usd:.4f}$ ({amount_wei} wei)")
-
-            # Проверяем и делаем approve если нужно
-            allowance = await self.check_allowance(wallet, self.cashplus_contract_address)
-            if allowance < amount_wei:
-                self.logger.info(f"🔓 Approving USDT for {wallet.name}...")
-                if not await self.approve_usdt(wallet, self.cashplus_contract_address, amount_wei):
-                    self.logger.error(f"❌ Failed to approve USDT for {wallet.name}")
-                    return False
-
-            # Выполняем подписку
-            nonce = self.web3.eth.get_transaction_count(wallet.address)
-
-            transaction = cashplus_contract.functions.subscribe(
-                Web3.to_checksum_address(self.usdt_address),  # uAddress
-                amount_wei  # uAmount
-            ).build_transaction({
-                'from': wallet.address,
-                'gas': 200000,
-                'gasPrice': self.web3.eth.gas_price,
-                'nonce': nonce,
-                'chainId': self.web3.eth.chain_id
-            })
-
-            signed_txn = wallet.account.sign_transaction(transaction)
-            tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
-
-            self.logger.info(f"📤 Subscribe transaction sent for {wallet.name}: {tx_hash.hex()}")
-
-            receipt = await asyncio.to_thread(
-                self.web3.eth.wait_for_transaction_receipt,
-                tx_hash,
-                timeout=120
-            )
-
-            if receipt.status == 1:
-                self.logger.info(f"✅ {wallet.name} subscribe successful! TX: {tx_hash.hex()}")
-
-                # ✅ УВЕЛИЧИВАЕМ СЧЕТЧИК ТРАНЗАКЦИЙ ПРИ УСПЕШНОЙ ПОДПИСКЕ
-                self._increment_wallet_transaction_count(wallet.address)
-
-                # ✅ ИСПОЛЬЗУЕМ НОРМАЛИЗОВАННОЕ ИМЯ СЕТИ ДЛЯ EXPLORER
-                normalized_network = normalize_network_name('Pharos Atlantic')
-                network_config = self.config.get_network_by_name(normalized_network)
-                if network_config and network_config.get('explorer'):
-                    explorer_url = network_config['explorer'].rstrip('/')
-                    tx_explorer_url = f"{explorer_url}/tx/{tx_hash.hex()}"
-                    self.logger.info(f"🌐 View in explorer: {tx_explorer_url}")
-
                 return True
-            else:
-                self.logger.error(f"❌ {wallet.name} subscribe failed: {tx_hash.hex()}")
-                return False
 
-        except Exception as e:
-            self.logger.error(f"❌ Subscribe execution failed for {wallet.name}: {e}")
+            self.logger.error(f"{wallet.name}: approval failed with status {receipt.status}")
             return False
 
-    def _round_to_four_decimals(self, amount: float) -> float:
-        """Округление до 4 знаков после запятой"""
-        return round(amount, 4)
+        except Exception as exc:
+            self.logger.error(f"{wallet.name}: approval error for {asset.symbol}: {exc}")
+            return False
+
+    def _encode_subscription_call(self, asset_id: str, amount_wei: int) -> str:
+        selector = bytes.fromhex(self.SUBSCRIBE_SELECTOR.removeprefix("0x"))
+        asset_bytes = bytes.fromhex(asset_id.removeprefix("0x")).rjust(32, b"\x00")
+        amount_bytes = amount_wei.to_bytes(32, byteorder="big")
+        return Web3.to_hex(selector + asset_bytes + amount_bytes)
+
+    async def _execute_subscription(
+        self, wallet, asset: SubscriptionAsset, amount_wei: int, human_amount: float
+    ) -> bool:
+        try:
+            nonce = self.web3.eth.get_transaction_count(wallet.address)
+            gas_limit = self.subscription_settings.get("subscribe_gas_limit", 450000)
+            gas_price = self.web3.eth.gas_price
+
+            tx = {
+                "to": self.subscription_contract,
+                "from": wallet.address,
+                "value": 0,
+                "data": self._encode_subscription_call(asset.asset_id, amount_wei),
+                "gas": gas_limit,
+                "maxFeePerGas": gas_price,
+                "maxPriorityFeePerGas": gas_price,
+                "nonce": nonce,
+                "chainId": self.web3.eth.chain_id,
+            }
+
+            signed = wallet.account.sign_transaction(tx)
+            tx_hash = self.web3.eth.send_raw_transaction(signed.raw_transaction)
+            self.logger.info(
+                f"{wallet.name}: subscribing {human_amount} {asset.symbol} via {self.subscription_contract}"
+            )
+
+            receipt = await asyncio.to_thread(
+                self.web3.eth.wait_for_transaction_receipt, tx_hash, timeout=240
+            )
+            if receipt.status == 1:
+                self._increment_wallet_transaction_count(wallet.address)
+                explorer = self._build_explorer_link(tx_hash.hex())
+                if explorer:
+                    self.logger.info(f"{wallet.name}: subscription confirmed {explorer}")
+                return True
+
+            self.logger.error(f"{wallet.name}: subscription failed with status {receipt.status}")
+            return False
+
+        except Exception as exc:
+            self.logger.error(f"{wallet.name}: subscription error for {asset.symbol}: {exc}")
+            return False
+
+    def _build_explorer_link(self, tx_hash: str) -> Optional[str]:
+        network = self.config.get_network_by_name("Pharos Atlantic")
+        explorer = network.get("explorer") if network else None
+        if explorer:
+            return f"{explorer.rstrip('/')}/tx/{tx_hash}"
+        return None
 
     async def execute_random_subscription(self, wallet, network_name: str) -> bool:
-        """✅ ИСПРАВЛЕННАЯ ВЕРСИЯ С ПРАВИЛЬНЫМ ЛОГИРОВАНИЕМ БАЛАНСОВ"""
-        try:
-            # ✅ ИСПОЛЬЗУЕМ УНИФИЦИРОВАННУЮ ПРОВЕРКУ СЕТИ
-            if not is_pharos_network(network_name):
-                self.logger.info(f"⚠️ Subscription only available for Pharos Atlantic network")
-                return False
-
-            self.logger.info(f"🎯 Starting subscription check for {wallet.name}")
-
-            # ✅ 1. ПОКАЗЫВАЕМ ОБА БАЛАНСА: НАТИВНЫЙ И USDT
-            native_balance = await self.get_native_balance(wallet)
-            usdt_balance = await self.get_usdt_balance(wallet)
-
-            self.logger.info(f"📊 {wallet.name} balances - Native: {native_balance:.6f} PHRS, USDT: {usdt_balance:.4f}$")
-
-            # ✅ 2. ПРОВЕРКА ЛИМИТА ТРАНЗАКЦИЙ (100 макс)
-            max_transactions = self.config.get_subscription_settings().get('max_transactions_per_wallet', 100)
-            if not await self.check_transaction_limit(wallet, max_transactions):
-                return False
-
-            # ✅ 3. ПРОВЕРКА ПОДКЛЮЧЕНИЯ К СЕТИ
-            if not self.web3.is_connected():
-                self.logger.error("❌ Web3 not connected")
-                return False
-
-            # ✅ 4. ПРОВЕРКА БАЛАНСА USDT (для подписки)
-            min_usdt_balance = self.config.get_subscription_settings().get('min_usdt_balance', 0.1)
-            if usdt_balance < min_usdt_balance:
-                self.logger.info(
-                    f"⏭️ Skipping {wallet.name} - low USDT: {usdt_balance:.4f}$ (min: {min_usdt_balance}$)")
-                return False
-
-            # ✅ 5. ГЕНЕРАЦИЯ СУММЫ С УЧЕТОМ БАЛАНСА USDT И НАСТРОЕК
-            subscription_settings = self.config.get_subscription_settings()
-            min_amount = subscription_settings.get('min_subscription_amount', 0.02)
-            max_amount = subscription_settings.get('max_subscription_amount', 0.2)
-            max_percentage = subscription_settings.get('max_percentage_of_balance', 80) / 100
-
-            # Ограничиваем максимальную сумму процентом от USDT баланса
-            max_possible = min(max_amount, usdt_balance * max_percentage)
-
-            if min_amount > max_possible:
-                self.logger.info(f"⏭️ Skipping {wallet.name} - USDT balance too low for min subscription")
-                return False
-
-            subscription_amount = random.uniform(min_amount, max_possible)
-            subscription_amount = self._round_to_four_decimals(subscription_amount)
-
-            self.logger.info(
-                f"💸 {wallet.name} subscription: {subscription_amount:.4f}$ USDT (balance: {usdt_balance:.4f}$ USDT)")
-
-            # ✅ 6. ВЫПОЛНЕНИЕ ПОДПИСКИ
-            return await self.execute_subscribe(wallet, subscription_amount)
-
-        except Exception as e:
-            self.logger.error(f"❌ Subscription failed for {wallet.name}: {e}")
+        normalized = normalize_network_name(network_name)
+        if not is_pharos_network(normalized):
+            self.logger.info("Subscription flow is only enabled for Pharos Atlantic")
             return False
 
+        if not self.subscription_contract or not self.assets:
+            return False
+
+        if not self.web3.is_connected():
+            self.logger.error("Web3 provider is not connected")
+            return False
+
+        native_balance = self.web3.from_wei(self.web3.eth.get_balance(wallet.address), "ether")
+        min_native = self.subscription_settings.get("min_native_balance", 0.001)
+        if native_balance < min_native:
+            self.logger.info(
+                f"{wallet.name}: low native balance {native_balance:.6f}, needs at least {min_native}"
+            )
+            return False
+
+        asset = random.choice(self.assets)
+        decimals = await self._get_token_decimals(asset)
+        balance_readable, _ = await self._get_token_balance(wallet, asset, decimals)
+        if balance_readable <= 0:
+            self.logger.info(f"{wallet.name}: no balance for {asset.symbol}, skipping")
+            return False
+
+        amount = self._choose_amount(asset, balance_readable)
+        if amount is None or amount <= 0:
+            self.logger.info(
+                f"{wallet.name}: insufficient {asset.symbol} balance for subscription "
+                f"(balance {balance_readable:.6f}, requires > {asset.min_amount})"
+            )
+            return False
+
+        amount_wei = self._to_wei(amount, decimals)
+        if not await self._ensure_allowance(wallet, asset, amount_wei):
+            return False
+
+        return await self._execute_subscription(wallet, asset, amount_wei, amount)
+
     def get_wallet_stats(self) -> dict:
-        """✅ ПОЛУЧЕНИЕ СТАТИСТИКИ ПО ТРАНЗАКЦИЯМ КОШЕЛЬКОВ"""
         return self.wallet_transaction_count.copy()

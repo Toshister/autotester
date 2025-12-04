@@ -1,9 +1,10 @@
 import asyncio
 import random
+import time
 from web3 import Web3
 from utils.logger import setup_logger
 from utils.randomizer import Randomizer
-from config.constants import is_rise_network, is_opn_network, normalize_network_name
+from config.constants import is_rise_network, is_opn_network, is_arc_network, normalize_network_name
 
 
 class SwapService:
@@ -21,6 +22,12 @@ class SwapService:
         self.router_address = None
         self.router_contract = None
         self.router_type = None
+        self.arc_native_placeholder = "0xEeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        self.permit2_address = None
+        self.arc_curve_router_address = None
+        self.arc_curve_router_contract = None
+        self.arc_defi_router_address = None
+        self.arc_defi_router_contract = None
 
         self._initialize_router()
 
@@ -36,18 +43,9 @@ class SwapService:
             network_name = network_config['name'] if network_config else ""
             normalized_name = normalize_network_name(network_name)
 
-            self.logger.info(f"🔍 Initializing router for chain_id: {chain_id}")
+            self.logger.debug(f"🔍 Initializing router for chain_id: {chain_id}")
 
-            if is_rise_network(normalized_name) or chain_id == 11155931:
-                configured_address = None
-                if network_config:
-                    configured_address = network_config.get('contracts', {}).get('gaspump_router')
-                self.router_address = configured_address or "0x5eC9BEaCe4a0f46F77945D54511e2b454cb8F38E"
-                self.router_type = "gaspump"
-                self.router_abi = self._get_gaspump_abi()
-                self.logger.info("✅ Using Gaspump router for Rise Testnet")
-
-            elif is_opn_network(normalized_name) or chain_id == 984:
+            if is_opn_network(normalized_name) or chain_id == 984:
                 configured_address = None
                 if network_config:
                     configured_address = network_config.get('contracts', {}).get('iopn_router')
@@ -56,14 +54,48 @@ class SwapService:
                 self.router_abi = self._get_iopn_router_abi()
                 self.logger.info("✅ Using IOPN router for OPN Testnet")
 
-            elif chain_id == 688689:
-                self.router_address = "0x1E656B2C6B6e91ef6E6A2B16475Df7b7D223e3c2"
-                self.router_type = "faroswap"
-                self.router_abi = self._get_gaspump_abi()
-                self.logger.info("✅ Detected Pharos Atlantic - Faroswap router (not active)")
+            elif is_arc_network(normalized_name) or chain_id == 5042002:
+                configured_address = None
+                if network_config:
+                    configured_address = network_config.get('contracts', {}).get('universal_router')
+                    self.permit2_address = network_config.get('contracts', {}).get('permit2')
+                    self.arc_curve_router_address = network_config.get('contracts', {}).get('curve_router')
+                    self.arc_defi_router_address = network_config.get('contracts', {}).get('defi_router')
+                self.router_address = configured_address or "0xbf4479C07Dc6fdc6dAa764A0ccA06969e894275F"
+                self.router_type = "arc_universal"
+                self.router_abi = self._get_universal_router_abi()
+                self.permit2_address = self.permit2_address or "0x000000000022d473030f116ddee9f6b43ac78ba3"
+                self.logger.info("✅ Using Universal router for Arc Testnet")
+
+                # Инициализируем Curve router для альтернативных маршрутов
+                curve_addr = self.arc_curve_router_address or "0xff5cb29241f002ffed2eaa224e3e996d24a6e8d1"
+                try:
+                    self.arc_curve_router_contract = self.web3.eth.contract(
+                        address=Web3.to_checksum_address(curve_addr),
+                        abi=self._get_arc_router_abi()
+                    )
+                    self.logger.info(f"✅ Curve router available for Arc: {curve_addr}")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Failed to init Curve router for Arc: {e}")
+
+                defi_addr = self.arc_defi_router_address or "0x284C5Afc100ad14a458255075324fA0A9dfd66b1"
+                try:
+                    self.arc_defi_router_contract = self.web3.eth.contract(
+                        address=Web3.to_checksum_address(defi_addr),
+                        abi=self._get_arc_defi_router_abi()
+                    )
+                    self.logger.info(f"✅ DeFi router available for Arc: {defi_addr}")
+                except Exception as e:
+                    self.logger.warning(f"⚠️ Failed to init DeFi router for Arc: {e}")
+
+            elif is_rise_network(normalized_name) or chain_id == 11155931:
+                self.logger.warning("⚠️ Rise Testnet swaps via Gaspump disabled in this build")
+                self.router_address = None
+                self.router_type = None
+                self.router_abi = None
 
             else:
-                self.logger.error(f"❌ Unsupported chain_id: {chain_id}")
+                self.logger.warning(f"ℹ️ Swap router not configured for chain_id: {chain_id}")
                 return
 
             # ✅ СОЗДАЕМ КОНТРАКТ ТОЛЬКО ЕСЛИ ЕСТЬ АДРЕС
@@ -80,46 +112,6 @@ class SwapService:
             self.logger.error(f"❌ Router initialization failed: {e}")
             self.router_contract = None
 
-    def _get_gaspump_abi(self):
-        """ABI для Gaspump Router"""
-        return [
-            {
-                "inputs": [
-                    {"internalType": "address", "name": "fromToken", "type": "address"},
-                    {"internalType": "address", "name": "toToken", "type": "address"},
-                    {"internalType": "uint256", "name": "fromTokenAmount", "type": "uint256"},
-                    {"internalType": "uint256", "name": "expReturnAmount", "type": "uint256"},
-                    {"internalType": "uint256", "name": "minReturnAmount", "type": "uint256"},
-                    {"internalType": "address[]", "name": "mixAdapters", "type": "address[]"},
-                    {"internalType": "address[]", "name": "mixPairs", "type": "address[]"},
-                    {"internalType": "address[]", "name": "assetTo", "type": "address[]"},
-                    {"internalType": "uint256", "name": "directions", "type": "uint256"},
-                    {"internalType": "bytes[]", "name": "moreInfos", "type": "bytes[]"},
-                    {"internalType": "bytes", "name": "feeData", "type": "bytes"},
-                    {"internalType": "uint256", "name": "deadLine", "type": "uint256"}
-                ],
-                "name": "mixSwap",
-                "outputs": [],
-                "stateMutability": "payable",
-                "type": "function"
-            },
-            {
-                "inputs": [
-                    {"internalType": "address", "name": "fromToken", "type": "address"},
-                    {"internalType": "address", "name": "toToken", "type": "address"},
-                    {"internalType": "uint256", "name": "fromTokenAmount", "type": "uint256"}
-                ],
-                "name": "getMixSwapExpectedReturn",
-                "outputs": [
-                    {"internalType": "uint256", "name": "expReturnAmount", "type": "uint256"},
-                    {"internalType": "uint256", "name": "minReturnAmount", "type": "uint256"},
-                    {"internalType": "uint256[]", "name": "distribution", "type": "uint256[]"}
-                ],
-                "stateMutability": "view",
-                "type": "function"
-            }
-        ]
-
     def _get_iopn_router_abi(self):
         """ABI для IOPN Router"""
         return [
@@ -135,6 +127,88 @@ class SwapService:
                 "stateMutability": "payable",
                 "type": "function"
             }
+        ]
+
+    def _get_arc_router_abi(self):
+        """ABI для Curve router в Arc"""
+        return [
+            {
+                "inputs": [
+                    {"internalType": "address[11]", "name": "_route", "type": "address[11]"},
+                    {"internalType": "uint256[4][5]", "name": "_swap_params", "type": "uint256[4][5]"},
+                    {"internalType": "uint256", "name": "_amount", "type": "uint256"},
+                    {"internalType": "uint256", "name": "_min_dy", "type": "uint256"}
+                ],
+                "name": "exchange",
+                "outputs": [
+                    {"internalType": "uint256", "name": "amountOut", "type": "uint256"}
+                ],
+                "stateMutability": "payable",
+                "type": "function"
+            }
+        ]
+
+    def _get_arc_defi_router_abi(self):
+        """ABI для дополнительного Arc роутера (swapExactTokensForTokens / findBestPath)"""
+        return [
+            {
+                "inputs": [
+                    {"internalType": "uint256", "name": "amountIn", "type": "uint256"},
+                    {"internalType": "uint256", "name": "amountOutMin", "type": "uint256"},
+                    {"internalType": "address[]", "name": "path", "type": "address[]"},
+                    {"internalType": "address", "name": "to", "type": "address"}
+                ],
+                "name": "swapExactTokensForTokens",
+                "outputs": [
+                    {"internalType": "uint256[]", "name": "amounts", "type": "uint256[]"}
+                ],
+                "stateMutability": "nonpayable",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    {"internalType": "address", "name": "tokenIn", "type": "address"},
+                    {"internalType": "address", "name": "tokenOut", "type": "address"}
+                ],
+                "name": "findBestPath",
+                "outputs": [
+                    {"internalType": "address[]", "name": "path", "type": "address[]"}
+                ],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    {"internalType": "uint256", "name": "amountIn", "type": "uint256"},
+                    {"internalType": "address[]", "name": "path", "type": "address[]"}
+                ],
+                "name": "getAmountsOut",
+                "outputs": [
+                    {"internalType": "uint256[]", "name": "amounts", "type": "uint256[]"}
+                ],
+                "stateMutability": "view",
+                "type": "function"
+            }
+        ]
+
+    def _get_universal_router_abi(self):
+        """Краткий ABI Universal Router execute"""
+        return [
+            {
+                "name": "execute",
+                "type": "function",
+                "stateMutability": "payable",
+                "inputs": [
+                    {"internalType": "bytes", "name": "commands", "type": "bytes"},
+                    {"internalType": "bytes[]", "name": "inputs", "type": "bytes[]"},
+                    {"internalType": "uint256", "name": "deadline", "type": "uint256"}
+                ],
+                "outputs": []
+            },
+            {"inputs": [], "name": "WETH9", "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+             "stateMutability": "view", "type": "function"},
+            {"inputs": [], "name": "PERMIT2", "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+             "stateMutability": "view", "type": "function"}
         ]
 
     def _get_erc20_abi(self):
@@ -218,6 +292,32 @@ class SwapService:
         except Exception as e:
             self.logger.error(f"❌ Error getting token balance: {e}")
             return 0
+
+    async def _snapshot_token_balances(self, wallet, tokens: dict) -> dict:
+        """Фиксируем баланс нативки и всех токенов для кошелька перед swap"""
+        snapshot = {"__native__": wallet.web3.eth.get_balance(wallet.address) if wallet.web3 else 0}
+        zero_address = "0x0000000000000000000000000000000000000000"
+
+        for symbol, address in tokens.items():
+            if not address or address.lower() == zero_address:
+                continue
+            try:
+                code = wallet.web3.eth.get_code(Web3.to_checksum_address(address))
+                if not code or code == b"\x00":
+                    self.logger.debug(
+                        f"ℹ️ Skipping {symbol} balance check on {wallet.web3.eth.chain_id}: "
+                        f"no contract code at {address}"
+                    )
+                    continue
+            except Exception as e:
+                self.logger.warning(
+                    f"⚠️ Skipping {symbol} balance check on {wallet.web3.eth.chain_id}: {e}"
+                )
+                continue
+
+            snapshot[symbol] = await self.get_token_balance(wallet, address)
+
+        return snapshot
 
     async def get_token_decimals(self, token_address: str) -> int:
         """Получение decimals токена"""
@@ -305,162 +405,56 @@ class SwapService:
             self.logger.error(f"❌ Approval failed: {e}")
             return False
 
-    def _get_swap_params(self, wallet_address, token_in, token_out):
-        """✅ УПРОЩЕННЫЕ ПАРАМЕТРЫ ДЛЯ GASPUMP"""
-        # Основные токены
-        NATIVE_ETH = "0x0000000000000000000000000000000000000000"
-        WETH = "0x4200000000000000000000000000000000000006"
-
-        # ✅ УНИВЕРСАЛЬНЫЙ АДАПТЕР ДЛЯ ВСЕХ СВОПОВ
-        mix_adapters = [Web3.to_checksum_address("0x4f8c8e05e946de09d768d062c5e969d1c8920c72")]
-
-        # ✅ ПРОСТАЯ ЛОГИКА ДЛЯ ВСЕХ ПАР ТОКЕНОВ
-        if token_in == NATIVE_ETH and token_out != WETH:
-            # ETH -> любой токен (через WETH)
-            mix_pairs = [Web3.to_checksum_address(WETH), Web3.to_checksum_address(token_out)]
-            asset_to = [Web3.to_checksum_address(WETH), Web3.to_checksum_address(token_out),
-                        Web3.to_checksum_address(wallet_address)]
-            directions = 0
-            self.logger.info(f"🔄 ETH -> {self._get_token_symbol(token_out)} (via WETH)")
-
-        elif token_in != WETH and token_out == NATIVE_ETH:
-            # любой токен -> ETH (через WETH)
-            mix_pairs = [Web3.to_checksum_address(WETH), Web3.to_checksum_address(WETH)]
-            asset_to = [Web3.to_checksum_address(WETH), Web3.to_checksum_address(WETH),
-                        Web3.to_checksum_address(wallet_address)]
-            directions = 0
-            self.logger.info(f"🔄 {self._get_token_symbol(token_in)} -> ETH (via WETH)")
-
-        elif token_in == WETH or token_out == WETH:
-            # прямой своп с WETH
-            mix_pairs = [Web3.to_checksum_address(token_out if token_in == WETH else token_in)]
-            asset_to = [Web3.to_checksum_address(token_out), Web3.to_checksum_address(wallet_address)]
-            directions = 0
-            self.logger.info(f"🔄 Direct WETH swap")
-
-        else:
-            # ERC20 -> ERC20 (прямой путь)
-            mix_pairs = [Web3.to_checksum_address(token_out)]
-            asset_to = [Web3.to_checksum_address(token_out), Web3.to_checksum_address(wallet_address)]
-            directions = 0
-            self.logger.info(
-                f"🔄 Direct ERC20: {self._get_token_symbol(token_in)} -> {self._get_token_symbol(token_out)}")
-
-        return mix_adapters, mix_pairs, asset_to, directions
-
-    async def execute_swap(self, wallet, token_in: str, token_out: str, amount_in: int) -> bool:
-        """Универсальный метод выполнения свапа"""
+    async def approve_token_for_spender(self, wallet, token_address: str, spender: str, amount: int) -> bool:
+        """Approve токенов для указанного spender"""
         try:
-            self.logger.info(
-                f"🔄 GASPUMP: {self._get_token_symbol(token_in)} -> {self._get_token_symbol(token_out)}")
+            if token_address == "0x0000000000000000000000000000000000000000":
+                return True
 
-            # ✅ ПРАВИЛЬНЫЕ АДРЕСА
-            NATIVE_ETH = "0x0000000000000000000000000000000000000000"
-            ROUTER_NATIVE_ETH = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
+            token_address_checksum = Web3.to_checksum_address(token_address)
+            spender_checksum = Web3.to_checksum_address(spender)
 
-            # Конвертируем адреса для роутера
-            if token_in == NATIVE_ETH:
-                token_in_checksum = Web3.to_checksum_address(ROUTER_NATIVE_ETH)
-                actual_token_in = NATIVE_ETH
-            else:
-                token_in_checksum = Web3.to_checksum_address(token_in)
-                actual_token_in = token_in
-
-            if token_out == NATIVE_ETH:
-                token_out_checksum = Web3.to_checksum_address(ROUTER_NATIVE_ETH)
-            else:
-                token_out_checksum = Web3.to_checksum_address(token_out)
-
-            # ✅ ПОЛУЧАЕМ ПАРАМЕТРЫ СВОПА
-            mix_adapters, mix_pairs, asset_to, directions = self._get_swap_params(
-                wallet.address, token_in, token_out
+            # ✅ ПРОВЕРЯЕМ ТЕКУЩИЙ ALLOWANCE
+            token_contract = self.web3.eth.contract(
+                address=token_address_checksum,
+                abi=self.erc20_abi
             )
+            current_allowance = token_contract.functions.allowance(wallet.address, spender_checksum).call()
+            if current_allowance >= amount:
+                self.logger.info("✅ Allowance already sufficient")
+                return True
 
-            # ✅ УПРОЩЕННЫЕ КОТИРОВКИ (50% slippage для тестовой сети)
-            exp_return = amount_in // 2
-            min_return = amount_in // 4
-
-            self.logger.info(
-                f"📊 Quotes: Expected {await self._format_amount(exp_return, token_in)}, Min {await self._format_amount(min_return, token_out)}")
-
-            more_infos = [b'', b'']
-            fee_data = b''
-            deadline = self.web3.eth.get_block('latest')['timestamp'] + 1200
-
-            # ✅ APPROVE ДЛЯ ERC20 ТОКЕНОВ
-            if actual_token_in != NATIVE_ETH:
-                allowance = await self.check_allowance(wallet, actual_token_in, self.router_address)
-                self.logger.info(f"🔍 Current allowance: {allowance}, Required: {amount_in}")
-
-                if allowance < amount_in:
-                    self.logger.info("🔓 Approving tokens...")
-                    if not await self.approve_token(wallet, actual_token_in, amount_in):
-                        return False
-                else:
-                    self.logger.info("✅ Allowance sufficient")
-
-            # Подготавливаем транзакцию
             nonce = self.web3.eth.get_transaction_count(wallet.address)
-
-            transaction_params = {
+            transaction = token_contract.functions.approve(
+                spender_checksum,
+                amount
+            ).build_transaction({
                 'from': wallet.address,
-                'gas': 500000,
+                'gas': 120000,
                 'gasPrice': self.web3.eth.gas_price,
                 'nonce': nonce,
                 'chainId': self.web3.eth.chain_id
-            }
+            })
 
-            # ✅ ДОБАВЛЯЕМ VALUE ДЛЯ НАТИВНЫХ ТОКЕНОВ
-            if actual_token_in == NATIVE_ETH:
-                transaction_params['value'] = amount_in
-                self.logger.info(f"💎 Adding native token value: {await self._format_amount(amount_in, token_in)}")
-
-            transaction = self.router_contract.functions.mixSwap(
-                token_in_checksum,
-                token_out_checksum,
-                amount_in,
-                exp_return,
-                min_return,
-                mix_adapters,
-                mix_pairs,
-                asset_to,
-                directions,
-                more_infos,
-                fee_data,
-                deadline
-            ).build_transaction(transaction_params)
-
-            # Отправляем транзакцию
             signed_txn = wallet.account.sign_transaction(transaction)
             tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
 
-            self.logger.info(f"📤 GASPUMP transaction sent: {tx_hash.hex()}")
+            self.logger.info(f"📝 Approval transaction sent: {tx_hash.hex()}")
 
-            # Ждем подтверждения
             receipt = await asyncio.to_thread(
                 self.web3.eth.wait_for_transaction_receipt,
                 tx_hash,
                 timeout=120
             )
-
             if receipt.status == 1:
-                self.logger.info(f"✅ GASPUMP successful! TX: {tx_hash.hex()}")
-
-                # ✅ ИСПОЛЬЗУЕМ НОРМАЛИЗОВАННОЕ ИМЯ СЕТИ ДЛЯ EXPLORER
-                normalized_network = normalize_network_name('Rise Testnet')
-                network_config = self.config.get_network_by_name(normalized_network)
-                if network_config and network_config.get('explorer'):
-                    explorer_url = network_config['explorer'].rstrip('/')
-                    tx_explorer_url = f"{explorer_url}/tx/{tx_hash.hex()}"
-                    self.logger.info(f"🌐 View in explorer: {tx_explorer_url}")
-
+                self.logger.info("✅ Approval successful")
                 return True
             else:
-                self.logger.error(f"❌ GASPUMP failed: {tx_hash.hex()}")
+                self.logger.error("❌ Approval failed")
                 return False
 
         except Exception as e:
-            self.logger.error(f"❌ GASPUMP execution failed: {e}")
+            self.logger.error(f"❌ Approval failed: {e}")
             return False
 
     async def execute_random_swap(self, wallet, network_name: str) -> bool:
@@ -468,7 +462,11 @@ class SwapService:
         normalized_network = normalize_network_name(network_name)
 
         if is_rise_network(normalized_network):
-            return await self._execute_rise_swap(wallet, normalized_network)
+            self.logger.warning(f"⚠️ Swap operations disabled for {normalized_network}")
+            return False
+
+        if is_arc_network(normalized_network):
+            return await self._execute_arc_swap(wallet, normalized_network)
 
         if is_opn_network(normalized_network):
             return await self._execute_opn_swap(wallet, normalized_network)
@@ -476,64 +474,693 @@ class SwapService:
         self.logger.info(f"⚠️ Swap operations недоступны для сети {normalized_network}")
         return False
 
-    async def _execute_rise_swap(self, wallet, normalized_network: str) -> bool:
-        """SWAP через Gaspump для Rise Testnet"""
+    def _build_arc_route(self, base_route: list, base_params: list, reverse: bool = False) -> dict:
+        """Собирает маршруты для Curve router (padding + опциональный реверс)"""
+        zero_address = "0x0000000000000000000000000000000000000000"
+
+        if reverse:
+            trimmed_route = [addr for addr in base_route if addr != zero_address]
+            reversed_route = list(reversed(trimmed_route))
+            reversed_route += [zero_address] * max(11 - len(reversed_route), 0)
+
+            used_params = [row for row in base_params if any(row)]
+            reversed_params = list(reversed(used_params))
+            reversed_params += [[0, 0, 0, 0]] * max(5 - len(reversed_params), 0)
+
+            return {"route": reversed_route[:11], "swap_params": reversed_params[:5]}
+
+        padded_route = base_route + [zero_address] * max(11 - len(base_route), 0)
+        padded_params = base_params + [[0, 0, 0, 0]] * max(5 - len(base_params), 0)
+        return {"route": padded_route[:11], "swap_params": padded_params[:5]}
+
+    def _get_arc_route_templates(self, tokens: dict) -> dict:
+        """Маршруты для Arc на Curve (расширенный список)"""
+        native = self.arc_native_placeholder
+
+        wusdc = tokens.get('WUSDC')
+        rusdc = tokens.get('rUSDC')
+        eurc = tokens.get('EURC')
+        ca4f = tokens.get('CA4F')
+        tst = tokens.get('TST')
+        warc = tokens.get('wARC')
+        dusdt = tokens.get('dUSDT')
+        brid = tokens.get('BRID')
+        bbtoken = tokens.get('bbToken')
+
+        pools = {
+            "rusdc": "0xa87680b380207f6eb2ab0613401277124659d7f3",
+            "warc": "0xe82a94d78120d06b9ef6709ee22a3696a0ecf520",
+            "dusdt": "0xdfcefa1350a88deb1db0e7ef2cf39dbecb7ba569",
+            "brid": "0xadbc6745ce0248ef470d2e344d95ad7442de6041",
+            "bbtoken": "0xf2f812214d2b9f83ae430e06962dd889e19b9eb3",
+            # Updated per working EURC->USDC swap (0x74a127...364): router sent funds to this pool
+            "eurc": "0x269b47978f4348c96f521658ef452ff85906fcfe",
+            "tst": "0x16de4cc9c6271c1e06d0889d48648bc42746b4eb",
+            "ca4f": "0x3b9624be2f1280fc927532f44daf15901260d9ec"
+        }
+
+        templates = {}
+
+        if native and wusdc:
+            base_route = [native, wusdc, wusdc]
+            base_params = [[0, 0, 8, 0]]
+            templates['WUSDC'] = {
+                "forward": self._build_arc_route(base_route, base_params),
+                "reverse": self._build_arc_route(base_route, base_params, reverse=True)
+            }
+
+        if native and wusdc and rusdc:
+            base_route = [native, wusdc, wusdc, pools["rusdc"], rusdc]
+            base_params = [[0, 0, 8, 0], [0, 1, 1, 10]]
+            templates['rUSDC'] = {
+                "forward": self._build_arc_route(base_route, base_params),
+                "reverse": self._build_arc_route([rusdc, pools["rusdc"], wusdc, wusdc, native], [[1, 0, 1, 10], [0, 0, 8, 0]])
+            }
+
+        if native and wusdc and warc:
+            base_route = [native, wusdc, wusdc, pools["warc"], warc]
+            base_params = [[0, 0, 8, 0], [0, 1, 1, 20]]
+            templates['wARC'] = {
+                "forward": self._build_arc_route(base_route, base_params),
+                "reverse": self._build_arc_route(base_route, base_params, reverse=True)
+            }
+
+        if native and wusdc and dusdt:
+            base_route = [native, wusdc, wusdc, pools["dusdt"], dusdt]
+            base_params = [[0, 0, 8, 0], [0, 1, 1, 10]]
+            templates['dUSDT'] = {
+                "forward": self._build_arc_route(base_route, base_params),
+                "reverse": self._build_arc_route(base_route, base_params, reverse=True)
+            }
+
+        if native and wusdc and brid:
+            base_route = [native, wusdc, wusdc, pools["brid"], brid]
+            base_params = [[0, 0, 8, 0], [0, 1, 1, 20]]
+            templates['BRID'] = {
+                "forward": self._build_arc_route(base_route, base_params),
+                "reverse": self._build_arc_route(base_route, base_params, reverse=True)
+            }
+
+        if native and wusdc and bbtoken:
+            base_route = [native, wusdc, wusdc, pools["bbtoken"], bbtoken]
+            base_params = [[0, 0, 8, 0], [0, 1, 1, 10]]
+            templates['bbToken'] = {
+                "forward": self._build_arc_route(base_route, base_params),
+                "reverse": self._build_arc_route(base_route, base_params, reverse=True)
+            }
+
+        if native and wusdc and eurc:
+            base_route = [native, wusdc, wusdc, pools["eurc"], eurc]
+            base_params = [[0, 0, 8, 0], [1, 0, 1, 10]]
+            templates['EURC'] = {
+                "forward": self._build_arc_route(base_route, base_params),
+                "reverse": self._build_arc_route(base_route, base_params, reverse=True)
+            }
+
+        if native and wusdc and eurc and tst:
+            base_route = [native, wusdc, wusdc, pools["eurc"], eurc, pools["tst"], tst]
+            base_params = [[0, 0, 8, 0], [1, 0, 1, 10], [0, 1, 1, 20]]
+            templates['TST'] = {
+                "forward": self._build_arc_route(base_route, base_params),
+                "reverse": self._build_arc_route(base_route, base_params, reverse=True)
+            }
+
+        if native and wusdc and eurc and ca4f:
+            base_route = [native, wusdc, wusdc, pools["eurc"], eurc, pools["ca4f"], ca4f]
+            base_params = [[0, 0, 8, 0], [1, 0, 1, 10], [1, 0, 1, 20]]
+            templates['CA4F'] = {
+                "forward": self._build_arc_route(base_route, base_params),
+                "reverse": self._build_arc_route(base_route, base_params, reverse=True)
+            }
+
+        return templates
+
+    async def _execute_arc_defi_swap(self, wallet, tokens: dict, nonzero_tokens: dict) -> bool:
+        """SWAP через DeFi router (defi-on-arc) с мин. суммой 5 USDC и балансом >=40 USDC"""
         try:
-            if not self.router_contract:
-                self.logger.error("❌ Router contract not initialized")
+            if not self.arc_defi_router_contract:
                 return False
 
-            self.logger.info(f"🔄 Starting random swap on Gaspump for {wallet.name}")
+            usdc_addr = tokens.get('USDC')
+            if not usdc_addr:
+                self.logger.error("❌ USDC address missing for DeFi swap")
+                return False
+
+            usdc_balance = nonzero_tokens.get('USDC', 0)
+            usdc_decimals = await self.get_token_decimals(usdc_addr)
+            min_balance_required = int(40 * (10 ** usdc_decimals))
+            if usdc_balance < min_balance_required:
+                self.logger.debug("ℹ️ USDC balance below 40, skipping DeFi router")
+                return False
+
+            target_symbols = ['EURC', 'SRAC', 'RACS', 'SACS', 'KITTY', 'DOGG']
+            available_targets = [sym for sym in target_symbols if tokens.get(sym)]
+            if not available_targets:
+                self.logger.error("❌ No target tokens configured for DeFi swap")
+                return False
+
+            target_symbol = random.choice(available_targets)
+            target_addr = tokens.get(target_symbol)
+
+            spendable = usdc_balance
+            min_swap = int(5 * (10 ** usdc_decimals))
+            max_swap = int(5.5 * (10 ** usdc_decimals))
+            # выбираем 5-5.5 USDC, шаг 0.001
+            amount_usdc = round(random.uniform(5, 5.5), 3)
+            amount_in = int(amount_usdc * (10 ** usdc_decimals))
+            if amount_in < min_swap:
+                amount_in = min_swap
+            if amount_in > max_swap:
+                amount_in = max_swap
+            if amount_in > spendable:
+                self.logger.warning("⚠️ Not enough USDC to meet fixed swap amount for DeFi router")
+                return False
+
+            if not await self.approve_token_for_spender(wallet, usdc_addr, self.arc_defi_router_contract.address, amount_in):
+                return False
+
+            try:
+                path = self.arc_defi_router_contract.functions.findBestPath(
+                    Web3.to_checksum_address(usdc_addr),
+                    Web3.to_checksum_address(target_addr)
+                ).call()
+                if not path or len(path) < 2:
+                    path = [Web3.to_checksum_address(usdc_addr), Web3.to_checksum_address(target_addr)]
+            except Exception:
+                path = [Web3.to_checksum_address(usdc_addr), Web3.to_checksum_address(target_addr)]
+
+            try:
+                amounts_out = self.arc_defi_router_contract.functions.getAmountsOut(amount_in, path).call()
+                min_out = int(amounts_out[-1] * 0.8) if amounts_out else 0  # широкий slippage 20%
+            except Exception:
+                min_out = 0
+
+            gas_price = max(self.web3.eth.gas_price, self.web3.to_wei(5, 'gwei'))
+            tx = self.arc_defi_router_contract.functions.swapExactTokensForTokens(
+                amount_in,
+                min_out,
+                path,
+                wallet.address
+            ).build_transaction({
+                'from': wallet.address,
+                'value': 0,
+                'gas': 700000,
+                'gasPrice': gas_price,
+                'nonce': self.web3.eth.get_transaction_count(wallet.address),
+                'chainId': self.web3.eth.chain_id
+            })
+
+            self.logger.info(
+                f"📤 Arc swap via DeFi router USDC -> {target_symbol}, amount: {await self._format_amount(amount_in, usdc_addr)}"
+            )
+
+            signed_txn = wallet.account.sign_transaction(tx)
+            tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
+            receipt = await asyncio.to_thread(
+                self.web3.eth.wait_for_transaction_receipt,
+                tx_hash,
+                timeout=240
+            )
+            if receipt.status == 1:
+                self.logger.info(f"✅ Arc DeFi router swap successful: {tx_hash.hex()}")
+                return True
+
+            self.logger.error("❌ Arc DeFi router swap reverted")
+            return False
+
+        except Exception as e:
+            self.logger.error(f"❌ Arc DeFi router swap failed: {e}")
+            return False
+
+    async def _execute_arc_swap(self, wallet, normalized_network: str) -> bool:
+        """SWAP для Arc Testnet: случайно Universal Router (Synthra) или Curve"""
+        try:
+            if self.router_type != "arc_universal" or not self.router_contract:
+                self.logger.error("❌ Universal router is not configured for Arc")
+                return False
+
+            if not wallet.web3 or not wallet.web3.is_connected():
+                network_config = self.config.get_network_by_name(normalized_network)
+                if not network_config or not wallet.connect_to_network(network_config['rpc_url']):
+                    self.logger.error("❌ Wallet not connected to Arc network")
+                    return False
 
             tokens = self.config.get_tokens_for_network(normalized_network)
             if not tokens:
                 self.logger.error(f"❌ No tokens configured for {normalized_network}")
                 return False
 
-            available_symbols = ['ETH', 'WETH', 'USDC', 'USDT', 'RISE', 'WBTC', 'MOG', 'PEPE']
-
-            available_tokens = {}
-            for symbol, address in tokens.items():
-                if symbol in available_symbols:
-                    available_tokens[symbol] = address
-
-            if len(available_tokens) < 2:
-                self.logger.error("❌ Not enough available tokens for swap")
+            network_config = self.config.get_network_by_name(normalized_network) or {}
+            native_symbol = network_config.get('native_token', 'USDC')
+            wusdc_addr = tokens.get('WUSDC')
+            syn_addr = tokens.get('SYN')
+            usdt_addr = tokens.get('USDT')
+            if not wusdc_addr:
+                self.logger.error("❌ WUSDC address not configured for Arc")
                 return False
 
-            token_symbols = list(available_tokens.keys())
-            token_in_symbol, token_out_symbol = random.sample(token_symbols, 2)
-            token_in_address = available_tokens[token_in_symbol]
-            token_out_address = available_tokens[token_out_symbol]
+            balance_snapshot = await self._snapshot_token_balances(wallet, tokens)
+            native_balance = balance_snapshot.get('__native__', 0)
+            nonzero_tokens = {sym: bal for sym, bal in balance_snapshot.items() if sym != '__native__' and bal > 0}
+            self.logger.debug(
+                f"💰 Swap balance snapshot | native: {self.web3.from_wei(native_balance, 'ether'):.6f} "
+                f"| tokens: {', '.join(nonzero_tokens.keys()) if nonzero_tokens else 'none'}")
 
-            self.logger.info(f"🎲 Selected swap pair: {token_in_symbol} -> {token_out_symbol}")
+            usdc_addr = tokens.get('USDC')
+            usdc_decimals = await self.get_token_decimals(usdc_addr or "0x0")
+            min_defi_balance = int(40 * (10 ** usdc_decimals))
+            allow_defi_router = (
+                self.arc_defi_router_contract is not None
+                and nonzero_tokens.get('USDC', 0) >= min_defi_balance
+            )
 
-            balance = await self.get_token_balance(wallet, token_in_address)
-            if balance == 0:
-                self.logger.warning(f"⚠️ Zero balance for {token_in_symbol}")
+            # Минимальные суммы (в токенах) для нестабильных маршрутов, чтобы избежать ревёртов на мелочи
+            min_amount_tokens = {
+                'wARC': 0.01,
+                'dUSDT': 0.01,
+                'bbToken': 0.01,
+                'BRID': 0.05,
+                'TST': 0.2,
+                # Усиливаем минималки для проблемных целей на Curve
+                'CA4F': 1.0,
+                'EURC': 1.0,
+                'rUSDC': 0.3
+            }
+
+            async def apply_min_amount(symbol: str, amount: int) -> int:
+                """Применить минимальную сумму для конкретного токена (в wei/единицах токена)"""
+                if symbol not in min_amount_tokens:
+                    return amount
+                token_addr = tokens.get(symbol)
+                decimals = await self.get_token_decimals(token_addr or "0x0")
+                min_raw = int(min_amount_tokens[symbol] * (10 ** decimals))
+                return max(amount, min_raw)
+
+            # Пока Universal Router на Arc нестабилен, приоритет Curve
+            use_curve = True
+            route_templates = self._get_arc_route_templates(tokens) if use_curve else {}
+            if use_curve and (not route_templates or not self.arc_curve_router_contract):
+                self.logger.debug("ℹ️ No Curve routes available or curve router missing, falling back to Universal")
+                use_curve = False
+
+            # Попробуем новый DeFi роутер с равной вероятностью (~1/3), если хватает USDC
+            if allow_defi_router and random.random() < 0.34:
+                success_defi = await self._execute_arc_defi_swap(wallet, tokens, nonzero_tokens)
+                if success_defi:
+                    return True
+                self.logger.info("ℹ️ DeFi router swap failed or skipped, falling back to Curve/Universal")
+
+            native_to_token = random.random() < 0.75
+
+            # Универсальные токены для Universal Router (также нужны в Curve валидации)
+            allowed_universal_symbols = {'USDC', 'WUSDC', 'SYN', 'USDT'}
+
+            def pick_token_from_balances(allowed=None):
+                allowed_set = set(allowed) if allowed else None
+                candidates = {
+                    sym: bal for sym, bal in nonzero_tokens.items()
+                    if not allowed_set or sym in allowed_set
+                }
+                if not candidates:
+                    return None, 0
+                choice = random.choice(list(candidates.keys()))
+                return choice, candidates[choice]
+
+            if native_to_token:
+                from_symbol = native_symbol  # источник — native
+                balance = native_balance
+                if balance <= 0:
+                    # Если нет native, пробуем токены
+                    native_to_token = False
+                    from_symbol, balance = pick_token_from_balances(['SYN', 'USDT', 'WUSDC'])
+                    if not from_symbol or balance <= 0:
+                        self.logger.warning("⚠️ No balance available for Arc swap (neither native nor tokens)")
+                        return False
+            else:
+                from_symbol, balance = pick_token_from_balances(['SYN', 'USDT', 'WUSDC'])
+                if not from_symbol or balance <= 0:
+                    # fallback к native
+                    native_to_token = True
+                    balance = native_balance
+                    from_symbol = native_symbol
+                    if balance <= 0:
+                        self.logger.warning("⚠️ No balance available for Arc swap (tokens and native empty)")
+                        return False
+
+            swap_percentage = random.uniform(0.3, 1.5) / 100
+            amount_in = int(balance * swap_percentage)
+            if amount_in <= 0:
+                self.logger.warning("⚠️ Swap amount is below threshold after adjustments")
                 return False
 
-            swap_percentage = Randomizer.get_random_percentage(0.5, 2.5)
-            amount_in = int(balance * swap_percentage / 100)
+            gas_price = max(self.web3.eth.gas_price, self.web3.to_wei(5, 'gwei'))
 
-            token_decimals = await self.get_token_decimals(token_in_address)
-            min_amount = 10 ** (token_decimals - 3)  # 0.001 токена
+            if use_curve:
+                # ---------- Curve branch ----------
+                templates = self._get_arc_route_templates(tokens)
+                arc_tokens = list(templates.keys())
+                if not arc_tokens:
+                    self.logger.debug("ℹ️ Curve routes empty, fallback to Universal")
+                    use_curve = False
 
-            if amount_in < min_amount:
-                amount_in = min_amount
+                if use_curve:
+                    target_symbol = None
+                    route_data = None
+                    if native_to_token:
+                        target_symbol = random.choice(arc_tokens)
+                        route_data = templates.get(target_symbol, {}).get('forward')
+                        # Отбрасываем Curve для целей TST/EURC/CA4F если сумма < 1 USDC
+                        if target_symbol in {'TST', 'EURC', 'CA4F'} and amount_in < self.web3.to_wei(1, 'ether'):
+                            self.logger.debug(f"ℹ️ Amount too low for Curve target {target_symbol}, skipping")
+                            use_curve = False
+                            route_data = None
+                    else:
+                        # Берем только те токены, по которым есть баланс
+                        candidates = [t for t in arc_tokens if t in nonzero_tokens]
+                        if not candidates:
+                            self.logger.warning("⚠️ No token balance for Curve swap")
+                            use_curve = False
+                        else:
+                            from_symbol = random.choice(candidates)
+                            target_symbol = native_symbol
+                            route_data = templates.get(from_symbol, {}).get('reverse')
 
-            if amount_in > balance:
-                self.logger.warning(f"⚠️ Not enough balance for swap")
+                    if not route_data:
+                        self.logger.warning("⚠️ No Curve route for selected swap, fallback to Universal")
+                        use_curve = False
+
+                if use_curve:
+                    zero_address = "0x0000000000000000000000000000000000000000"
+                    zero_address = "0x0000000000000000000000000000000000000000"
+                    if native_to_token:
+                        balance_available = native_balance
+                        gas_reserve = wallet.web3.to_wei(0.05, 'ether')
+                        spendable = max(balance_available - gas_reserve, 0)
+                    else:
+                        from_address = tokens.get(from_symbol)
+                        balance_available = nonzero_tokens.get(from_symbol, 0)
+                        spendable = balance_available
+
+                    if spendable <= 0:
+                        self.logger.warning("⚠️ No balance for Curve swap")
+                        return False
+
+                    amount_in = int(spendable * swap_percentage)
+                    amount_in = await apply_min_amount(from_symbol, amount_in)
+                    if amount_in <= 0:
+                        amount_in = min(spendable, 1)
+                    if native_to_token and amount_in > spendable:
+                        amount_in = spendable
+                    if amount_in <= 0:
+                        self.logger.warning("⚠️ Swap amount is below threshold after adjustments")
+                        return False
+
+                    # Если выбранный токен (в токен->native) не поддерживается Universal и Curve, пропускаем
+                    if not native_to_token:
+                        from_symbol_upper = (from_symbol or "").upper()
+                        universal_allowed = from_symbol_upper in allowed_universal_symbols
+                        curve_allowed = from_symbol_upper in arc_tokens
+                        if not universal_allowed and not curve_allowed:
+                            self.logger.warning(f"⚠️ Token {from_symbol} not supported by Universal or Curve, skipping swap")
+                            return False
+
+                    if not native_to_token:
+                        from_address = tokens.get(from_symbol)
+                        if not await self.approve_token(wallet, from_address, amount_in):
+                            return False
+
+                    route = []
+                    for addr in route_data['route']:
+                        if addr.lower() == zero_address:
+                            route.append(zero_address)
+                        else:
+                            route.append(Web3.to_checksum_address(addr))
+
+                    swap_params = [list(map(int, row)) for row in route_data['swap_params']]
+
+                    transaction = self.arc_curve_router_contract.functions.exchange(
+                        route,
+                        swap_params,
+                        amount_in,
+                        0
+                    ).build_transaction({
+                        'from': wallet.address,
+                        'value': amount_in if native_to_token else 0,
+                        'gas': 1500000,
+                        'gasPrice': gas_price,
+                        'nonce': self.web3.eth.get_transaction_count(wallet.address),
+                        'chainId': self.web3.eth.chain_id
+                    })
+
+                    spent_readable = await self._format_amount(
+                        amount_in,
+                        zero_address if native_to_token else tokens.get(from_symbol)
+                    )
+                    self.logger.info(f"📤 Arc swap via Curve {from_symbol} -> {target_symbol}, amount: {spent_readable}")
+
+                    signed_txn = wallet.account.sign_transaction(transaction)
+                    tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
+                    receipt = await asyncio.to_thread(
+                        self.web3.eth.wait_for_transaction_receipt,
+                        tx_hash,
+                        timeout=240
+                    )
+                    if receipt.status == 1:
+                        self.logger.info(f"✅ Arc Curve swap successful: {tx_hash.hex()}")
+                        return True
+                    self.logger.error("❌ Arc Curve swap failed (reverted), attempting Universal fallback")
+                    # Don't return False here, let it fall through to Universal Router
+
+            # ---------- Universal Router branch ----------
+            V3_SWAP_EXACT_IN = b"\x00"
+            WRAP_NATIVE = b"\x0b"
+            UNWRAP_NATIVE = b"\x09"
+
+            allowed_tokens = {k: v for k, v in tokens.items() if k in allowed_universal_symbols and v}
+
+            commands = b""
+            inputs = []
+            value = 0
+            deadline = int(time.time()) + 1800
+
+            def encode_wrap(recipient: str, amount: int) -> bytes:
+                # Universal Router WRAP_ETH: (address recipient, uint256 amountMinOut)
+                return self.web3.codec.encode(
+                    ['address', 'uint256'],
+                    [Web3.to_checksum_address(recipient), amount]
+                )
+
+            def encode_unwrap(amount: int, recipient: str) -> bytes:
+                # UNWRAP_ETH: (address recipient, uint256 amountMinOut)
+                return self.web3.codec.encode(
+                    ['address', 'uint256'],
+                    [Web3.to_checksum_address(recipient), amount]
+                )
+
+            def encode_v3_swap(path: bytes, recipient: str, amount_in_v: int, min_out: int = 0) -> bytes:
+                # V3_SWAP_EXACT_IN: (address recipient, uint256 amountIn, uint256 amountOutMin, bytes path)
+                return self.web3.codec.encode(
+                    ['address', 'uint256', 'uint256', 'bytes'],
+                    [Web3.to_checksum_address(recipient), amount_in_v, min_out, path]
+                )
+
+            if native_to_token:
+                native_targets = [sym for sym in ['SYN', 'USDT', 'WUSDC'] if sym in allowed_tokens]
+                if not native_targets:
+                    self.logger.error("❌ Universal router has no native->token targets configured")
+                    return False
+                target_symbol = from_symbol if from_symbol in native_targets else random.choice(native_targets)
+                target_addr = tokens.get(target_symbol)
+
+                commands = WRAP_NATIVE + V3_SWAP_EXACT_IN
+                wrap_input = encode_wrap(wallet.address, amount_in)
+                path = Web3.to_bytes(hexstr=wusdc_addr[2:]) + (3000).to_bytes(3, 'big') + Web3.to_bytes(
+                    hexstr=target_addr[2:])
+                swap_input = encode_v3_swap(path, wallet.address, amount_in, 0)
+                inputs = [wrap_input, swap_input]
+                value = amount_in
+                token_for_log = target_addr
+            else:
+                # token -> native (USDC is chain native)
+                if from_symbol not in allowed_tokens:
+                    self.logger.error(f"❌ Universal router not allowed for token {from_symbol}")
+                    return False
+
+                token_addr = tokens.get(from_symbol)
+                if not token_addr:
+                    self.logger.error(f"❌ Token address missing for {from_symbol}")
+                    return False
+
+                # WUSDC -> USDC is unwrap/withdraw on token contract, not a swap
+                if from_symbol == 'WUSDC':
+                    wusdc_contract = self.web3.eth.contract(
+                        address=Web3.to_checksum_address(token_addr),
+                        abi=self._get_wopn_abi()
+                    )
+                    gas_price = max(self.web3.eth.gas_price, self.web3.to_wei(5, 'gwei'))
+                    tx = wusdc_contract.functions.withdraw(amount_in).build_transaction({
+                        'from': wallet.address,
+                        'value': 0,
+                        'gas': 200000,
+                        'gasPrice': gas_price,
+                        'nonce': self.web3.eth.get_transaction_count(wallet.address),
+                        'chainId': self.web3.eth.chain_id
+                    })
+                    self.logger.info(f"📤 Arc unwrap WUSDC -> USDC via withdraw, amount {await self._format_amount(amount_in, token_addr)}")
+                    signed_txn = wallet.account.sign_transaction(tx)
+                    tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
+                    receipt = await asyncio.to_thread(
+                        self.web3.eth.wait_for_transaction_receipt,
+                        tx_hash,
+                        timeout=240
+                    )
+                    if receipt.status == 1:
+                        self.logger.info(f"✅ Arc WUSDC withdraw successful: {tx_hash.hex()}")
+                        return True
+                    self.logger.error("❌ Arc WUSDC withdraw reverted, attempting Curve fallback")
+                    # fall through to Curve fallback logic below
+                # generic allowed tokens -> native through Universal Router
+                if not await self.approve_token(wallet, token_addr, amount_in):
+                    return False
+
+                commands = V3_SWAP_EXACT_IN + UNWRAP_NATIVE
+                path = Web3.to_bytes(hexstr=token_addr[2:]) + (3000).to_bytes(3, 'big') + Web3.to_bytes(
+                    hexstr=wusdc_addr[2:])
+                swap_input = encode_v3_swap(path, wallet.address, amount_in, 0)
+                unwrap_input = encode_unwrap(amount_in, wallet.address)
+                inputs = [swap_input, unwrap_input]
+                value = 0
+                token_for_log = token_addr
+
+            try:
+                transaction = self.router_contract.functions.execute(
+                    commands,
+                    inputs,
+                    deadline
+                ).build_transaction({
+                    'from': wallet.address,
+                    'value': value,
+                    'gas': 700000,
+                    'gasPrice': gas_price,
+                    'nonce': self.web3.eth.get_transaction_count(wallet.address),
+                    'chainId': self.web3.eth.chain_id
+                })
+
+                self.logger.info(
+                    f"📤 Arc swap via Universal Router | direction={'native->token' if native_to_token else 'token->native'} "
+                    f"| from {from_symbol} amount {await self._format_amount(amount_in, token_for_log if not native_to_token else '0x0')}")
+
+                signed_txn = wallet.account.sign_transaction(transaction)
+                tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
+                receipt = await asyncio.to_thread(
+                    self.web3.eth.wait_for_transaction_receipt,
+                    tx_hash,
+                    timeout=240
+                )
+
+                if receipt.status == 1:
+                    self.logger.info(f"✅ Arc Universal swap successful: {tx_hash.hex()}")
+                    return True
+
+                self.logger.error("❌ Arc swap failed (reverted), attempting Curve fallback")
+            except Exception as e:
+                self.logger.error(f"❌ Universal swap build/send failed: {e}, attempting Curve fallback")
+
+            # Fallback: пробуем Curve, если не прошло
+            templates = self._get_arc_route_templates(tokens)
+            arc_tokens = list(templates.keys())
+            if not arc_tokens or not self.arc_curve_router_contract:
                 return False
 
-            amount_in_formatted = await self._format_amount(amount_in, token_in_address)
+            # Пробуем тот же баланс/направление, но через Curve
+            route_data = None
+            target_symbol = native_symbol
+            spendable = 0
+            if native_to_token:
+                target_symbol = random.choice(arc_tokens)
+                route_data = templates.get(target_symbol, {}).get('forward')
+                if not route_data:
+                    return False
+
+                balance_available = native_balance
+                gas_reserve = wallet.web3.to_wei(0.05, 'ether')
+                spendable = max(balance_available - gas_reserve, 0)
+            else:
+                # токен -> native: выберем токен с балансом в Curve списке
+                candidates = [t for t in arc_tokens if t in nonzero_tokens]
+                if not candidates:
+                    return False
+                from_symbol = random.choice(candidates)
+                route_data = templates.get(from_symbol, {}).get('reverse')
+                if not route_data:
+                    return False
+                from_address = tokens.get(from_symbol)
+                spendable = nonzero_tokens.get(from_symbol, 0)
+
+            if spendable <= 0:
+                return False
+
+            # Пересчитываем сумму под фактический баланс выбранного токена
+            amount_in = int(spendable * swap_percentage)
+            amount_in = await apply_min_amount(from_symbol, amount_in)
+            if amount_in <= 0:
+                amount_in = min(spendable, 1)
+            if native_to_token and amount_in > spendable:
+                amount_in = spendable
+
+            if not native_to_token:
+                from_address = tokens.get(from_symbol)
+                if not await self.approve_token(wallet, from_address, amount_in):
+                    return False
+
+            zero_address = "0x0000000000000000000000000000000000000000"
+            route = []
+            for addr in route_data['route']:
+                if addr.lower() == zero_address:
+                    route.append(zero_address)
+                else:
+                    route.append(Web3.to_checksum_address(addr))
+            swap_params = [list(map(int, row)) for row in route_data['swap_params']]
+
+            transaction = self.arc_curve_router_contract.functions.exchange(
+                route,
+                swap_params,
+                amount_in,
+                0
+            ).build_transaction({
+                'from': wallet.address,
+                'value': amount_in if native_to_token else 0,
+                'gas': 700000,
+                'gasPrice': gas_price,
+                'nonce': self.web3.eth.get_transaction_count(wallet.address),
+                'chainId': self.web3.eth.chain_id
+            })
+
+            spent_readable = await self._format_amount(
+                amount_in,
+                zero_address if native_to_token else tokens.get(from_symbol)
+            )
             self.logger.info(
-                f"💸 Swap amount: {amount_in_formatted} {token_in_symbol} ({swap_percentage:.2f}% of balance)")
+                f"📤 Arc swap via Curve (fallback) {from_symbol} -> "
+                f"{target_symbol if native_to_token else native_symbol}: {spent_readable}"
+            )
 
-            return await self.execute_swap(wallet, token_in_address, token_out_address, amount_in)
+            signed_txn = wallet.account.sign_transaction(transaction)
+            tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
+            receipt = await asyncio.to_thread(
+                self.web3.eth.wait_for_transaction_receipt,
+                tx_hash,
+                timeout=240
+            )
+            if receipt.status == 1:
+                self.logger.info(f"✅ Arc Curve fallback swap successful: {tx_hash.hex()}")
+                return True
+
+            self.logger.error("❌ Arc swap failed (fallback Curve reverted)")
+            return False
 
         except Exception as e:
-            self.logger.error(f"❌ Rise swap failed: {e}")
+            self.logger.error(f"❌ Arc swap failed: {e}")
             return False
 
     async def _execute_opn_swap(self, wallet, normalized_network: str) -> bool:
@@ -565,7 +1192,14 @@ class SwapService:
                 self.logger.error("❌ No target tokens configured for OPN swaps")
                 return False
 
-            balance = wallet.web3.eth.get_balance(wallet.address)
+            balance_snapshot = await self._snapshot_token_balances(wallet, tokens)
+            native_balance = balance_snapshot.get('__native__', 0)
+            nonzero_tokens = {sym: bal for sym, bal in balance_snapshot.items() if sym != '__native__' and bal > 0}
+            self.logger.debug(
+                f"💰 Swap balance snapshot | native: {self.web3.from_wei(native_balance, 'ether'):.6f} "
+                f"| tokens: {', '.join(nonzero_tokens.keys()) if nonzero_tokens else 'none'}")
+
+            balance = native_balance
             if balance <= 0:
                 self.logger.warning("⚠️ No OPN balance available for swap")
                 return False

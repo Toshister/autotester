@@ -49,7 +49,7 @@ class Config:
             # Логируем информацию о сетях и токенах
             for network in self.networks:
                 network_tokens = self.get_tokens_for_network(network['name'])
-                self.logger.info(
+                self.logger.debug(
                     f"🌐 Network: {network['name']} (ChainID: {network['chain_id']}) - Tokens: {len(network_tokens)}")
 
         except json.JSONDecodeError as e:
@@ -212,13 +212,16 @@ class Config:
                         "PHRS": "0x0000000000000000000000000000000000000000",
                         "USDC": "0xE0BE08c77f415F577A1B3A9aD7a1Df1479564ec8",
                         "USDT": "0xE7E84B8B4f39C507499c40B4ac199B050e2882d5",
+                        "PCT": "0x4f848d61b35033619ce558a2fce8447cedd38d0d",
+                        "CORP": "0x656b4948c470f3420805abcb43f3928820a0f26d",
+                        "UST": "0x5e789bb07b2225132d26bb0ffaca7e37a5ecbebb",
                         "WBTC": "0x0c64F03EEa5c30946D5c55B4b532D08ad74638a4",
                         "WETH": "0x7d211F77525ea39A0592794f793cC1036eEaccD5",
                         "WPHRS": "0x838800b758277CC111B2d48Ab01e5E164f8E9471"
                     },
                     "contracts": {
                         "faroswap_router": "0x1E656B2C6B6e91ef6E6A2B16475Df7b7D223e3c2",
-                        "cashplus_subscription": "0x56f4add11d723412d27a9e9433315401b351d6e3"
+                        "structure_subscription": "0x62fdbc600e8badf8127e6298dd12b961edf08b5f"
                     }
                 },
                 {
@@ -261,6 +264,33 @@ class Config:
                     "contracts": {
                         "iopn_router": "0xb489bce5c9c9364da2d1d1bc5ce4274f63141885"
                     }
+                },
+                {
+                    "name": "Arc Testnet",
+                    "rpc_url": "https://rpc.testnet.arc.network",
+                    "wss_url": "wss://rpc.testnet.arc.network",
+                    "explorer": "https://testnet.arcscan.app",
+                    "chain_id": 5042002,
+                    "native_token": "USDC",
+                    "tokens": {
+                        "USDC": "0x3600000000000000000000000000000000000000",
+                        "EURC": "0x89B50855Aa3bE2F677cD6303Cec089B5F319D72a",
+                        "WUSDC": "0x911b4000D3422F482F4062a913885f7b035382Df",
+                        "dUSDT": "0x1Bcabc3f981D4E4F7CB65fdcBc112139d670EfB7",
+                        "BRID": "0x18635Cc718b2a1f6A62f7c2C7008cF0607eea8d9",
+                        "bbToken": "0x28951a0909Be0ae9Afb53015509C1732fd027ef3",
+                        "CA4F": "0xBc4e50dEBe49a207cf977b220416b6a5e289d2b5",
+                        "rUSDC": "0xAAC9c6387FFd1F840dA9F4E0F69E9838d4cB6Be0",
+                        "TST": "0xb2B6dA55472A9077B45Bd9CC57C42E107c56f18e",
+                        "wARC": "0x7D94bB687216f36Df9Deac7B340E470F06473B25",
+                        "SYN": "0xc5124c846c6e6307986988dfb7e743327aa05f19",
+                        "USDT": "0x175cdb1d338945f0d851a741ccf787d343e57952"
+                    },
+                    "contracts": {
+                        "curve_router": "0xff5cb29241f002ffed2eaa224e3e996d24a6e8d1",
+                        "universal_router": "0xbf4479C07Dc6fdc6dAa764A0ccA06969e894275F",
+                        "permit2": "0x000000000022d473030f116ddee9f6b43ac78ba3"
+                    }
                 }
             ],
             "operations": {
@@ -272,13 +302,42 @@ class Config:
                 "swap_percentage_max": 5.0
             },
             "subscription_settings": {
-                "min_usdt_balance": 0.1,
-                "min_subscription_amount": 0.02,
-                "max_subscription_amount": 0.2,
-                "max_percentage_of_balance": 80,
-                "max_transactions_per_wallet": 100,
+                "contract_address": "0x62fdbc600e8badf8127e6298dd12b961edf08b5f",
+                "max_percentage_of_balance": 90,
                 "retry_attempts": 2,
-                "delay_between_wallets": 15
+                "delay_between_wallets": 15,
+                "min_native_balance": 0.001,
+                "approve_gas_limit": 120000,
+                "subscribe_gas_limit": 450000,
+                "assets": [
+                    {
+                        "name": "Private Credit",
+                        "symbol": "PCT",
+                        "token_address": "0x4f848d61b35033619ce558a2fce8447cedd38d0d",
+                        "asset_id": "0x8b79ddf5ff2f0db54884b06a0b748a687abe7eb723e676eac22a5a811e9312ae",
+                        "decimals": 18,
+                        "min_amount": 9.0,
+                        "max_amount": 34.0
+                    },
+                    {
+                        "name": "Corporate Bond",
+                        "symbol": "CORP",
+                        "token_address": "0x656b4948c470f3420805abcb43f3928820a0f26d",
+                        "asset_id": "0xb6dad7cac45cd7ee7d611c0160667e8595bcece1e8dc2b22228b6f329e1caa60",
+                        "decimals": 18,
+                        "min_amount": 9.0,
+                        "max_amount": 34.0
+                    },
+                    {
+                        "name": "US Treasury",
+                        "symbol": "UST",
+                        "token_address": "0x5e789bb07b2225132d26bb0ffaca7e37a5ecbebb",
+                        "asset_id": "0xd048a586b49e0cf14afc137d0ebec0024a50aa5be56d006ecf46088f47537e33",
+                        "decimals": 18,
+                        "min_amount": 9.0,
+                        "max_amount": 34.0
+                    }
+                ]
             }
         }
 
@@ -348,13 +407,14 @@ class Config:
     def get_subscription_settings(self) -> dict:
         """✅ ПОЛУЧЕНИЕ НАСТРОЕК ДЛЯ ПОДПИСОК"""
         return self.config_data.get('subscription_settings', {
-            'min_usdt_balance': 0.1,
-            'min_subscription_amount': 0.02,
-            'max_subscription_amount': 0.2,
-            'max_percentage_of_balance': 80,
-            'max_transactions_per_wallet': 100,
+            'contract_address': '',
+            'max_percentage_of_balance': 90,
             'retry_attempts': 2,
-            'delay_between_wallets': 15
+            'delay_between_wallets': 15,
+            'min_native_balance': 0.001,
+            'approve_gas_limit': 120000,
+            'subscribe_gas_limit': 450000,
+            'assets': []
         })
 
     def get_pharos_config(self) -> dict:
@@ -369,7 +429,9 @@ class Config:
         """Получение случайного интервала"""
         min_interval = self.operations_config.get('min_interval_minutes', 2)
         max_interval = self.operations_config.get('max_interval_minutes', 5)
-        return Randomizer.get_random_interval(min_interval, max_interval)
+        interval_seconds = Randomizer.get_random_interval(min_interval, max_interval) * 60
+        # Ограничиваем верхний предел 25 сек при расчёте интервалов
+        return min(interval_seconds, 25)
 
     def get_operations_count(self) -> int:
         """Получение количества операций за цикл"""

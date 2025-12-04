@@ -4,6 +4,7 @@ import asyncio
 import time
 import re
 import json
+from urllib.parse import urlparse
 from web3 import Web3
 from utils.randomizer import Randomizer
 from utils.logger import setup_logger
@@ -64,9 +65,9 @@ class TransferService:
         for network_name, fallback_url in fallback_urls.items():
             if network_name not in explorer_urls:
                 explorer_urls[network_name] = fallback_url
-                self.logger.info(f"🔧 Using fallback URL for {network_name}: {fallback_url}")
+                self.logger.debug(f"🔧 Using fallback URL for {network_name}: {fallback_url}")
 
-        self.logger.info(f"✅ Explorer URLs configured for: {list(explorer_urls.keys())}")
+        self.logger.debug(f"✅ Explorer URLs configured for: {list(explorer_urls.keys())}")
         return explorer_urls
 
     async def get_random_address_from_explorer(self, network_name: str) -> str:
@@ -87,9 +88,15 @@ class TransferService:
 
             self.logger.info(f"🔍 Fetching addresses from: {url}")
 
+            # Blockscout-совместимые эксплореры (Arc и др.) — пробуем API v2
+            if 'arcscan.app' in url or 'blockscout' in url:
+                blockscout_address = await self._get_blockscout_addresses(url, normalized_network, timeout=8)
+                if blockscout_address:
+                    return blockscout_address
+
             # ✅ ОСОБЫЙ ПАРСЕР ДЛЯ OPN
             if is_opn_network(normalized_network):
-                return await self._get_opn_addresses_special(url)
+                return await self._get_opn_addresses_special(url, request_timeout=6)
             else:
                 return await self._get_addresses_standard(url, normalized_network)
 
@@ -97,7 +104,7 @@ class TransferService:
             self.logger.error(f"❌ Error getting random address from explorer: {e}")
             return None
 
-    async def _get_opn_addresses_special(self, url: str) -> str:
+    async def _get_opn_addresses_special(self, url: str, request_timeout: int = 8) -> str:
         """Упрощенный парсер для OPN Testnet - только страница транзакций"""
         try:
             self.logger.info("🔧 Using simplified OPN parser (txs page only)...")
@@ -109,13 +116,13 @@ class TransferService:
             }
 
             # ✅ ТОЛЬКО СТРАНИЦА ТРАНЗАКЦИЙ
-            txs_url = "https://testnet.iopn.tech/txs"
+            txs_url = url or "https://testnet.iopn.tech/txs"
 
             async with aiohttp.ClientSession() as session:
                 try:
                     self.logger.info(f"🔍 Parsing OPN transactions page: {txs_url}")
 
-                    async with session.get(txs_url, headers=headers, timeout=15) as response:
+                    async with session.get(txs_url, headers=headers, timeout=request_timeout) as response:
                         if response.status == 200:
                             html = await response.text()
 
@@ -260,7 +267,7 @@ class TransferService:
             }
 
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=30) as response:
+                async with session.get(url, headers=headers, timeout=10) as response:
                     if response.status == 200:
                         html = await response.text()
                         addresses = self._extract_addresses_from_html(html, network_name)
@@ -279,6 +286,62 @@ class TransferService:
 
         except Exception as e:
             self.logger.error(f"❌ Standard parser failed: {e}")
+            return None
+
+    async def _get_blockscout_addresses(self, url: str, network_name: str, timeout: int = 8) -> str:
+        """Получение адресов через Blockscout API (используется для Arc)"""
+        try:
+            parsed = urlparse(url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+            api_url = f"{base_url}/api/v2/transactions?page=1&page_size=50"
+
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/json',
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url, headers=headers, timeout=timeout) as response:
+                    if response.status != 200:
+                        self.logger.warning(f"⚠️ Blockscout API returned {response.status} for {network_name}")
+                        return None
+                    data = await response.json()
+
+            items = data.get('items', [])
+            candidates = set()
+
+            for item in items:
+                for key in ('from', 'to'):
+                    addr_obj = item.get(key) or {}
+                    addr = addr_obj.get('hash')
+                    if addr:
+                        candidates.add(addr)
+
+            # Фильтрация и проверка EOA
+            filtered = []
+            for addr in list(candidates)[:40]:  # ограничиваем количество RPC-проверок
+                if (not self._is_valid_address(addr) or
+                        self._is_burn_address(addr) or
+                        self._is_known_contract(addr)):
+                    continue
+                if await self._is_eoa_address(addr):
+                    filtered.append(Web3.to_checksum_address(addr))
+
+            if filtered:
+                selected = random.choice(filtered)
+                self.logger.info(
+                    f"✅ Blockscout API: {len(filtered)} EOA candidates for {network_name}, selected {selected[:16]}..."
+                )
+                return selected
+
+            self.logger.warning(f"⚠️ No EOA addresses from Blockscout API for {network_name}")
+            return None
+
+        except asyncio.TimeoutError:
+            self.logger.warning(f"⏰ Blockscout API timeout for {network_name} after {timeout}s")
+            return None
+        except Exception as e:
+            self.logger.error(f"❌ Blockscout API failed for {network_name}: {e}")
             return None
 
     def _extract_addresses_from_html(self, html: str, network_name: str) -> set:
@@ -360,6 +423,45 @@ class TransferService:
         # ✅ Генерируем валидный случайный адрес
         return Web3.to_checksum_address('0x' + ''.join(random.choices('0123456789abcdef', k=40)))
 
+    def _get_recent_active_addresses(self, min_tx_count: int = 5, blocks_depth: int = 50) -> list:
+        """Получение активных EOA из последних блоков по RPC (для сеток без HTML-данных)"""
+        addresses = set()
+        try:
+            latest = self.web3.eth.block_number
+            start = max(latest - blocks_depth, 0)
+            for blk in range(latest, start, -1):
+                block = self.web3.eth.get_block(blk, full_transactions=True)
+                for tx in block.transactions:
+                    for addr in [tx['from'], tx.get('to')]:
+                        if not addr:
+                            continue
+                        try:
+                            checksum = Web3.to_checksum_address(addr)
+                        except Exception:
+                            continue
+                        # Проверяем EOA и активность
+                        code = self.web3.eth.get_code(checksum)
+                        if code not in (b'', '0x'):
+                            continue
+                        tx_count = self.web3.eth.get_transaction_count(checksum)
+                        if tx_count >= min_tx_count:
+                            addresses.add(checksum)
+            return list(addresses)
+        except Exception as e:
+            self.logger.warning(f"⚠️ RPC collection of active addresses failed: {e}")
+            return []
+
+    async def _collect_active_addresses(self, min_tx_count: int = 5, blocks_depth: int = 50,
+                                        timeout: int = 8) -> list:
+        """Сбор активных адресов в отдельном потоке с ограничением по времени"""
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self._get_recent_active_addresses, min_tx_count, blocks_depth),
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            self.logger.warning(f"⚠️ RPC collection of active addresses timed out after {timeout}s")
+            return []
     async def _wait_for_cooldown(self):
         """Ожидание коолдауна между транзакциями"""
         current_time = time.time()
@@ -371,29 +473,49 @@ class TransferService:
     async def get_random_address(self, network_name: str) -> str:
         """Улучшенный выбор случайного адреса с приоритетом OPN парсера"""
         self.logger.info(f"🌐 Getting random address for {network_name}")
+        normalized_network = normalize_network_name(network_name)
 
-        # ✅ ОСОБАЯ ЛОГИКА ДЛЯ OPN
-        if is_opn_network(network_name):
-            # 1. Пробуем улучшенный OPN парсер
-            address = await self.get_random_address_from_explorer(network_name)
-            if address:
-                self.logger.info("✅ Using OPN parser address")
-                return address
+        if is_opn_network(normalized_network):
+            # Для OPN используем быстрый RPC-поиск с ограничением по времени, затем парсер/АПИ
+            active = await self._collect_active_addresses(min_tx_count=5, blocks_depth=40, timeout=8)
+            if active:
+                selected = random.choice(active)
+                self.logger.info(f"✅ Selected active OPN EOA from RPC: {selected[:16]}...")
+                return selected
 
-            # 2. Пробуем известные адреса (только как fallback)
-            known_address = await self._get_opn_addresses_from_known()
-            if known_address:
-                self.logger.info("⚠️ Using known OPN address (parser failed)")
-                return known_address
-        else:
-            # Стандартная логика для других сетей
-            address = await self.get_random_address_from_explorer(network_name)
-            if address and self._is_valid_address(address):
-                return Web3.to_checksum_address(address)
+            self.logger.warning("⚠️ No suitable OPN address found via RPC within time limit")
 
-        # ✅ Fallback для всех сетей
-        self.logger.warning("⚠️ Using fallback random address")
-        return self._generate_random_address()
+            # Пытаемся получить адрес через OPN-эксплорер с коротким таймаутом
+            opn_url = (
+                self.explorer_urls.get('OPN Testnet') or
+                self.explorer_urls.get(normalized_network) or
+                "https://testnet.iopn.tech/txs"
+            )
+            explorer_address = await self._get_opn_addresses_special(opn_url, request_timeout=6)
+            if explorer_address:
+                return explorer_address
+
+            # Fallback: API + список известных адресов
+            api_address = await self._get_opn_addresses_from_api(timeout=5)
+            if api_address:
+                return api_address
+
+            return await self._get_opn_addresses_from_known()
+
+        # Стандартная логика для других сетей
+        address = await self.get_random_address_from_explorer(normalized_network)
+        if address and self._is_valid_address(address):
+            return Web3.to_checksum_address(address)
+
+        # RPC fallback: ищем активные адреса в последних блоках
+        active = await self._collect_active_addresses(blocks_depth=50, timeout=8)
+        if active:
+            selected = random.choice(active)
+            self.logger.info(f"✅ Selected active EOA from RPC: {selected[:16]}...")
+            return selected
+
+        self.logger.warning("⚠️ No suitable address found, aborting transfer selection")
+        return None
 
     def _has_activity(self, address: str) -> bool:
         """Проверка что адрес имеет активность и не является нашим кошельком"""
@@ -407,8 +529,8 @@ class TransferService:
             balance = self.web3.eth.get_balance(checksum_addr)
             tx_count = self.web3.eth.get_transaction_count(checksum_addr)
 
-            # ✅ АДРЕС СЧИТАЕТСЯ АКТИВНЫМ ЕСЛИ ИМЕЕТ БАЛАНС ИЛИ ТРАНЗАКЦИИ
-            is_active = balance > 0 or tx_count > 0
+            # ✅ Требуем живую активность (не менее 5 транзакций)
+            is_active = balance > 0 or tx_count >= 5
 
             if is_active:
                 self.logger.debug(
@@ -610,15 +732,16 @@ class TransferService:
                         f"🎲 Using calculated amount: {wallet.web3.from_wei(transfer_amount, 'ether'):.6f} OPN")
 
             else:
-                # Для других сетей старые настройки
+                # Для других сетей динамический процент 0.2-1.0% от баланса
                 min_percentage = 0.2
-                max_percentage = 0.9
+                max_percentage = 1.0
                 transfer_percentage = random.uniform(min_percentage, max_percentage)
                 transfer_amount_eth = balance_native * (transfer_percentage / 100)
                 transfer_amount = wallet.web3.to_wei(transfer_amount_eth, 'ether')
 
-                min_amount = wallet.web3.to_wei(0.0001, 'ether')
-                max_amount = wallet.web3.to_wei(0.01, 'ether')
+                # Динамические границы: минимум 0.2% баланса, максимум 1% баланса
+                min_amount = int(balance * 0.002)
+                max_amount = int(balance * 0.01)
 
                 if transfer_amount < min_amount:
                     transfer_amount = min_amount
@@ -724,7 +847,7 @@ class TransferService:
             self.logger.error(f"❌ Transfer simulation failed for {wallet.name}: {e}")
             return False
 
-    async def _get_opn_addresses_from_api(self) -> str:
+    async def _get_opn_addresses_from_api(self, timeout: int = 5) -> str:
         """Упрощенный API парсер для OPN с проверкой EOA"""
         try:
             self.logger.info("🔧 Trying simplified OPN API...")
@@ -744,7 +867,7 @@ class TransferService:
                     try:
                         self.logger.info(f"🔧 Trying OPN API: {endpoint.split('?')[0]}...")
 
-                        async with session.get(endpoint, headers=headers, timeout=10) as response:
+                        async with session.get(endpoint, headers=headers, timeout=timeout) as response:
                             if response.status == 200:
                                 data = await response.json()
                                 addresses = self._extract_addresses_from_api_response(data)
@@ -774,8 +897,8 @@ class TransferService:
             self.logger.error(f"❌ OPN API method failed: {e}")
             return None
 
-    async def _is_eoa_address(self, address: str) -> bool:
-        """Проверка что адрес является EOA (не контрактом) и активен"""
+    async def _is_eoa_address(self, address: str, min_tx_count: int = 5) -> bool:
+        """Проверка что адрес является EOA (не контрактом) и активен (не менее min_tx_count tx)"""
         try:
             checksum_addr = Web3.to_checksum_address(address)
 
@@ -789,16 +912,22 @@ class TransferService:
                 return False  # Это контракт
 
             # ✅ ПРОВЕРКА АКТИВНОСТИ
-            balance = self.web3.eth.get_balance(checksum_addr)
+            _ = self.web3.eth.get_balance(checksum_addr)
             tx_count = self.web3.eth.get_transaction_count(checksum_addr)
 
-            return balance > 0 or tx_count > 0
+            if tx_count < min_tx_count:
+                self.logger.debug(
+                    f"⚠️ Address {address[:16]}... insufficient tx count ({tx_count}<{min_tx_count})"
+                )
+                return False
+
+            return True
 
         except Exception as e:
             self.logger.debug(f"❌ EOA check failed for {address[:16]}: {e}")
             return False
 
-    async def _is_active_address(self, address: str) -> bool:
+    async def _is_active_address(self, address: str, min_tx_count: int = 5) -> bool:
         """Проверка что адрес активен И является EOA (не контрактом)"""
         try:
             checksum_addr = Web3.to_checksum_address(address)
@@ -813,22 +942,14 @@ class TransferService:
                 self.logger.debug(f"🔍 Address {address[:16]}... is CONTRACT (has bytecode)")
                 return False
 
-            # ✅ ПРОВЕРЯЕМ БАЛАНС
-            balance = self.web3.eth.get_balance(checksum_addr)
-            if balance > 0:
-                self.logger.debug(
-                    f"🔍 Address {address[:16]}... has balance: {self.web3.from_wei(balance, 'ether'):.6f} OPN")
-                return True
+            # ✅ ПРОВЕРЯЕМ ТРАНЗАКЦИИ
+            tx_count = self.web3.eth.get_transaction_count(checksum_addr)
+            if tx_count < min_tx_count:
+                self.logger.debug(f"🔍 Address {address[:16]}... has only {tx_count} tx (<{min_tx_count})")
+                return False
 
-            # ✅ ПРОВЕРЯЕМ ТРАНЗАКЦИИ (только для не-zero адресов)
-            if address != '0x0000000000000000000000000000000000000000':
-                tx_count = self.web3.eth.get_transaction_count(checksum_addr)
-                if tx_count > 0:
-                    self.logger.debug(f"🔍 Address {address[:16]}... has {tx_count} transactions")
-                    return True
-
-            self.logger.debug(f"🔍 Address {address[:16]}... has no activity")
-            return False
+            self.logger.debug(f"🔍 Address {address[:16]}... has {tx_count} transactions")
+            return True
 
         except Exception as e:
             self.logger.debug(f"❌ Activity check failed for {address[:16]}: {e}")
@@ -1073,13 +1194,12 @@ class TransferService:
             balance = self.web3.eth.get_balance(checksum_addr)
             tx_count = self.web3.eth.get_transaction_count(checksum_addr)
 
-            is_active = balance > 0 or tx_count > 0
+            is_active = balance > 0 or tx_count >= 5
             if not is_active:
-                self.logger.debug(f"⚠️ Address {address[:16]}... has no activity (balance=0, txs=0)")
-                # Можно разрешить неактивные адреса, но с предупреждением
-                # return False  # Если хотите только активные адреса
+                self.logger.debug(f"⚠️ Address {address[:16]}... insufficient activity (balance=0, txs={tx_count})")
+                return False
 
-            self.logger.debug(f"✅ Address {address[:16]}... validated: EOA, active={is_active}")
+            self.logger.debug(f"✅ Address {address[:16]}... validated: EOA, txs={tx_count}, balance={balance}")
             return True
 
         except Exception as e:
