@@ -25,6 +25,7 @@ class TransferService:
         # ✅ КЭШ ПРОВЕРЕННЫХ КОНТРАКТОВ
         self.verified_contracts = set()
         self.verified_eoa = set()
+        self.arc_eoa_cache = []
 
     def _build_explorer_urls_from_config(self) -> dict:
         """Построение ПРАВИЛЬНЫХ URL эксплореров"""
@@ -84,6 +85,19 @@ class TransferService:
 
             if not url.startswith(('http://', 'https://')):
                 self.logger.error(f"❌ Invalid URL format for {normalized_network}: {url}")
+                return None
+
+            # Arc: используем только Blockscout API + локальный кэш успешных адресов
+            if normalized_network.lower().startswith('arc'):
+                address = await self._get_blockscout_addresses(url, normalized_network, timeout=6)
+                if address:
+                    self.arc_eoa_cache.append(address)
+                    return address
+                if self.arc_eoa_cache:
+                    cached = random.choice(self.arc_eoa_cache)
+                    self.logger.info(f"✅ Using cached Arc EOA: {cached[:16]}...")
+                    return cached
+                self.logger.warning("⚠️ No Arc address from Blockscout and cache is empty")
                 return None
 
             self.logger.info(f"🔍 Fetching addresses from: {url}")

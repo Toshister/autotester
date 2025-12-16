@@ -7,6 +7,7 @@ from services.transfer_service import TransferService
 from services.swap_service import SwapService
 from services.subscription_service import SubscriptionService
 from services.staking_service import StakingService
+from services.lending_service import LendingService
 from core.gas_monitor import GasMonitor
 from utils.randomizer import Randomizer
 from utils.logger import setup_logger
@@ -39,8 +40,8 @@ class TransactionEngine:
         self.operation_weights = {
             'transfer': 0,
             'swap': 0,
-            'subscribe': 0,
-            'stake': 0
+            'subscribe_stake': 0,
+            'lend_borrow': 0
         }
 
     def set_network_operation_weights(self, network_name: str):
@@ -49,31 +50,31 @@ class TransactionEngine:
         normalized_network = normalize_network_name(network_name)
 
         if is_pharos_network(normalized_network):
-            # Для Pharos - subscribe и staking поровну
+            # Для Pharos - подписка/стейк и lend/borrow (внутри 50/50)
             self.operation_weights = {
                 'transfer': 0,
                 'swap': 0,
-                'subscribe': 50,
-                'stake': 50
+                'subscribe_stake': 30,  # 50/50 внутри
+                'lend_borrow': 70       # 50/50 внутри
             }
-            self.logger.info(f"🎯 Set operation weights for {normalized_network}: Subscribe & Stake")
+            self.logger.info(f"🎯 Set operation weights for {normalized_network}: Subscribe/Stake + Lend/Borrow")
 
         elif is_rise_network(normalized_network):
-            # Для Rise Testnet - transfer и swap
+            # Для Rise Testnet - только трансфер (swap отключен)
             self.operation_weights = {
-                'transfer': 50,
-                'swap': 50,
-                'subscribe': 0,
-                'stake': 0
+                'transfer': 100,
+                'swap': 0,
+                'subscribe_stake': 0,
+                'lend_borrow': 0
             }
-            self.logger.info(f"🎯 Set operation weights for {normalized_network}: Transfer & Swap")
+            self.logger.info(f"🎯 Set operation weights for {normalized_network}: Transfers only (swaps disabled)")
 
         elif is_opn_network(normalized_network):
             self.operation_weights = {
-                'transfer': 30,
-                'swap': 70,
-                'subscribe': 0,
-                'stake': 0
+                'transfer': 20,
+                'swap': 80,
+                'subscribe_stake': 0,
+                'lend_borrow': 0
             }
             self.logger.info(f"🎯 Set operation weights for {normalized_network}: Transfer & Swap")
 
@@ -81,8 +82,8 @@ class TransactionEngine:
             self.operation_weights = {
                 'transfer': 20,
                 'swap': 80,
-                'subscribe': 0,
-                'stake': 0
+                'subscribe_stake': 0,
+                'lend_borrow': 0
             }
             self.logger.info(f"🎯 Set operation weights for {normalized_network}: Swap-focused")
 
@@ -91,8 +92,8 @@ class TransactionEngine:
             self.operation_weights = {
                 'transfer': 50,
                 'swap': 30,
-                'subscribe': 20,
-                'stake': 0
+                'subscribe_stake': 20,
+                'lend_borrow': 0
             }
             self.logger.info(f"🎯 Set operation weights for {normalized_network}: Mixed operations")
 
@@ -118,11 +119,14 @@ class TransactionEngine:
                 web3_instance = Web3(Web3.HTTPProvider(network['rpc_url']))
 
                 # ✅ ТОЛЬКО ОСНОВНЫЕ СЕРВИСЫ (БЕЗ NITRODEX)
+                lending_service = LendingService(web3_instance, self.config)
                 self.services[network['name']] = {
                     'transfer': TransferService(web3_instance, self.config, self.gas_monitor),
                     'swap': SwapService(web3_instance, self.config, self.gas_monitor),
                     'subscribe': SubscriptionService(web3_instance, self.config, self.gas_monitor),
-                    'stake': StakingService(web3_instance, self.config)
+                    'stake': StakingService(web3_instance, self.config),
+                    'lend': lending_service,
+                    'borrow': lending_service
                 }
                 self.logger.info(f"✅ Services initialized for {network['name']}")
 
@@ -135,11 +139,7 @@ class TransactionEngine:
                 'total_operations': 0,
                 'successful_operations': 0,
                 'failed_operations': 0,
-                'total_gas_used': 0,
-                'transfers': 0,
-                'swaps': 0,
-                'subscriptions': 0,
-                'stakes': 0
+                'total_gas_used': 0
             }
 
         self.start_monitoring()
@@ -188,7 +188,6 @@ class TransactionEngine:
         try:
             service = self.services.get(network_name, {}).get('swap')
             if service:
-                self.wallet_stats[wallet.name]['swaps'] += 1
                 return await service.execute_random_swap(wallet, network_name)
             else:
                 self.logger.error("❌ Swap service not available")
@@ -196,6 +195,30 @@ class TransactionEngine:
 
         except Exception as e:
             self.logger.error(f"❌ Swap operation failed: {e}")
+            return False
+
+    async def _execute_lend_operation(self, wallet, network_name: str) -> bool:
+        """Выполнение lend операции для Pharos Atlantic."""
+        try:
+            service = self.services.get(network_name, {}).get('lend')
+            if service:
+                return await service.execute_lend(wallet, network_name)
+            self.logger.error("❌ Lending service not available")
+            return False
+        except Exception as e:
+            self.logger.error(f"❌ Lending operation failed: {e}")
+            return False
+
+    async def _execute_borrow_operation(self, wallet, network_name: str) -> bool:
+        """Выполнение borrow операции для Pharos Atlantic."""
+        try:
+            service = self.services.get(network_name, {}).get('borrow')
+            if service:
+                return await service.execute_borrow(wallet, network_name)
+            self.logger.error("❌ Borrow service not available")
+            return False
+        except Exception as e:
+            self.logger.error(f"❌ Borrow operation failed: {e}")
             return False
 
     async def execute_operation_cycle(self, wallet_name: str, network_name: str) -> bool:
@@ -229,7 +252,6 @@ class TransactionEngine:
                 self.logger.info(f"🎲 Selected operation: TRANSFER")
                 service = self.services.get(network_name, {}).get('transfer')
                 if service:
-                    self.wallet_stats[wallet.name]['transfers'] += 1
                     success = await service.execute_random_transfer(wallet, network_name)
                 else:
                     self.logger.error("❌ Transfer service not available")
@@ -239,23 +261,29 @@ class TransactionEngine:
                 # ✅ ИСПОЛЬЗУЕМ ТОЛЬКО GASPUMP
                 success = await self._execute_swap_operation(wallet, network_name)
 
-            elif operation_type == 'subscribe':
-                self.logger.info(f"🎲 Selected operation: SUBSCRIBE")
-                service = self.services.get(network_name, {}).get('subscribe')
-                if service:
-                    self.wallet_stats[wallet.name]['subscriptions'] += 1
-                    success = await service.execute_random_subscription(wallet, network_name)
+            elif operation_type == 'subscribe_stake':
+                chosen = random.choice(['subscribe', 'stake'])
+                self.logger.info(f"🎲 Selected operation: {chosen.upper()} (from SUBSCRIBE/STAKE 50/50)")
+                if chosen == 'subscribe':
+                    service = self.services.get(network_name, {}).get('subscribe')
+                    if service:
+                        success = await service.execute_random_subscription(wallet, network_name)
+                    else:
+                        self.logger.error("❌ Subscription service not available")
                 else:
-                    self.logger.error("❌ Subscription service not available")
+                    service = self.services.get(network_name, {}).get('stake')
+                    if service:
+                        success = await service.execute_random_stake(wallet, network_name)
+                    else:
+                        self.logger.error("❌ Staking service not available")
 
-            elif operation_type == 'stake':
-                self.logger.info(f"🎲 Selected operation: STAKE")
-                service = self.services.get(network_name, {}).get('stake')
-                if service:
-                    self.wallet_stats[wallet.name]['stakes'] += 1
-                    success = await service.execute_random_stake(wallet, network_name)
+            elif operation_type == 'lend_borrow':
+                chosen = random.choice(['lend', 'borrow'])
+                self.logger.info(f"🎲 Selected operation: {chosen.upper()} (from LEND/BORROW 50/50)")
+                if chosen == 'lend':
+                    success = await self._execute_lend_operation(wallet, network_name)
                 else:
-                    self.logger.error("❌ Staking service not available")
+                    success = await self._execute_borrow_operation(wallet, network_name)
 
             # ✅ ОБНОВЛЯЕМ СТАТИСТИКУ ПОСЛЕ выполнения
             if success:
@@ -346,10 +374,7 @@ class TransactionEngine:
 
             self.logger.info(
                 f"   {wallet_name}: {stats['successful_operations']}/{stats['total_operations']} "
-                f"({success_rate:.1f}%) | Transfers: {stats.get('transfers', 0)} | "
-                f"Swaps: {stats.get('swaps', 0)} | "
-                f"Subscriptions: {stats.get('subscriptions', 0)} | "
-                f"Stakes: {stats.get('stakes', 0)}"
+                f"({success_rate:.1f}%)"
             )
 
     def get_wallet_statistics(self) -> dict:
@@ -387,19 +412,29 @@ class TransactionEngine:
                 # ✅ ТОЛЬКО GASPUMP
                 success = await self._execute_swap_operation(wallet, network_name)
 
-            elif operation_type == 'subscribe':
-                service = self.services.get(network_name, {}).get('subscribe')
-                if service:
-                    success = await service.execute_random_subscription(wallet, network_name)
+            elif operation_type == 'subscribe_stake':
+                # 50/50 между подпиской и стейком
+                chosen = random.choice(['subscribe', 'stake'])
+                if chosen == 'subscribe':
+                    service = self.services.get(network_name, {}).get('subscribe')
+                    if service:
+                        success = await service.execute_random_subscription(wallet, network_name)
+                    else:
+                        self.logger.error("❌ Subscription service not available")
                 else:
-                    self.logger.error("❌ Subscription service not available")
+                    service = self.services.get(network_name, {}).get('stake')
+                    if service:
+                        success = await service.execute_random_stake(wallet, network_name)
+                    else:
+                        self.logger.error("❌ Staking service not available")
 
-            elif operation_type == 'stake':
-                service = self.services.get(network_name, {}).get('stake')
-                if service:
-                    success = await service.execute_random_stake(wallet, network_name)
+            elif operation_type == 'lend_borrow':
+                # 50/50 между lend и borrow
+                chosen = random.choice(['lend', 'borrow'])
+                if chosen == 'lend':
+                    success = await self._execute_lend_operation(wallet, network_name)
                 else:
-                    self.logger.error("❌ Staking service not available")
+                    success = await self._execute_borrow_operation(wallet, network_name)
 
             else:
                 self.logger.error(f"❌ Unknown operation type: {operation_type}")

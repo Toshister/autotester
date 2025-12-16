@@ -191,17 +191,29 @@ async def show_available_operations_for_network(network_name: str):
     print(f"\n🔍 Доступные операции для {normalized_network}:")
 
     if is_pharos_network(normalized_network):
-        print("   ✅ Подписки (CashPlus)")
-        print("   ❌ Свопы (недоступно)")
-        print("   ❌ Трансферы (недоступно)")
+        print("   ✅ Подписки")
+        print("   ✅ Стейкинг")
+        print("   ✅ Lending / Borrow (WBTC/WETH)")
+        print("   ❌ Свопы")
+        print("   ❌ Трансферы")
     elif is_rise_network(normalized_network):
-        print("   ✅ Свопы (Gaspump)")
         print("   ✅ Трансферы")
-        print("   ❌ Подписки (недоступно)")
+        print("   ❌ Свопы (отключены в сборке)")
+        print("   ❌ Подписки")
+        print("   ❌ Стейкинг")
+        print("   ❌ Lending")
     elif is_opn_network(normalized_network):
         print("   ✅ Трансферы (0.1-0.3% от баланса)")
         print("   ✅ Свопы (OPN → OPNT/WOPN/tUSDT/tBNB)")
         print("   ❌ Подписки (недоступно)")
+        print("   ❌ Стейкинг")
+        print("   ❌ Lending")
+    elif normalized_network == "Arc Testnet":
+        print("   ✅ Свопы (Universal/Curve/DeFi)")
+        print("   ✅ Трансферы")
+        print("   ❌ Подписки")
+        print("   ❌ Стейкинг")
+        print("   ❌ Lending")
     else:
         print("   ⚠️  Все операции (режим тестирования)")
 
@@ -219,9 +231,12 @@ async def execute_operations_in_network(app, selected_network, transaction_count
 
     await refresh_wallet_balances_for_network(app.wallet_manager, normalized_network)
 
-    # ✅ ДОБАВЛЯЕМ ИНФОРМАЦИЮ О ДОСТУПНЫХ СЕРВИСАХ
-    available_services = list(app.transaction_engine.services.get(normalized_network, {}).keys())
-    print(f"🔧 Available services: {available_services}")
+    # ✅ ДОБАВЛЯЕМ ИНФОРМАЦИЮ О ДОСТУПНЫХ СЕРВИСАХ (ТЕКУЩИЕ ВЕСА > 0)
+    active_operations = [
+        op for op, weight in app.transaction_engine.operation_weights.items()
+        if weight > 0
+    ]
+    print(f"🔧 Active operations: {active_operations}")
 
     # ПРЕДУПРЕЖДЕНИЕ о реальных транзакциях
     print(f"\n⚠️  ВНИМАНИЕ: Будут выполнены РЕАЛЬНЫЕ транзакции в сети {normalized_network}!")

@@ -105,8 +105,8 @@ class StakingService:
         return int((amount * scale).to_integral_value(rounding=ROUND_DOWN))
 
     def _choose_amount(self, balance: float) -> Optional[Decimal]:
-        lower = Decimal("2")
-        upper = min(Decimal("6"), Decimal(str(balance)))
+        lower = Decimal("45")
+        upper = min(Decimal("89"), Decimal(str(balance)))
         if upper < lower:
             return None
 

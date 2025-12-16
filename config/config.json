@@ -126,8 +126,9 @@
         "WPHRS": "0x838800b758277CC111B2d48Ab01e5E164f8E9471"
       },
       "contracts": {
-        "faroswap_router": "0x1E656B2C6B6e91ef6E6A2B16475Df7b7D223e3c2",
-        "structure_subscription": "0x62fdbc600e8badf8127e6298dd12b961edf08b5f"
+        "bitverse_router": "0x585fC3b498b1ABA1F0527663789361D3547aFC88",
+        "structure_subscription": "0x62fdbc600e8badf8127e6298dd12b961edf08b5f",
+        "lending_pool": "0x62e72185f7deabda9f6a3df3b23d67530b42eff6"
       }
     },
     {
@@ -225,30 +226,30 @@
       {
         "name": "Private Credit",
         "symbol": "PCT",
-        "token_address": "0x4f848d61b35033619ce558a2fce8447cedd38d0d",
-        "asset_id": "0x8b79ddf5ff2f0db54884b06a0b748a687abe7eb723e676eac22a5a811e9312ae",
-        "decimals": 18,
-        "min_amount": 9.0,
-        "max_amount": 34.0
-      },
-      {
-        "name": "Corporate Bond",
-        "symbol": "CORP",
-        "token_address": "0x656b4948c470f3420805abcb43f3928820a0f26d",
-        "asset_id": "0xb6dad7cac45cd7ee7d611c0160667e8595bcece1e8dc2b22228b6f329e1caa60",
-        "decimals": 18,
-        "min_amount": 9.0,
-        "max_amount": 34.0
-      },
-      {
-        "name": "US Treasury",
-        "symbol": "UST",
-        "token_address": "0x5e789bb07b2225132d26bb0ffaca7e37a5ecbebb",
-        "asset_id": "0xd048a586b49e0cf14afc137d0ebec0024a50aa5be56d006ecf46088f47537e33",
-        "decimals": 18,
-        "min_amount": 9.0,
-        "max_amount": 34.0
-      }
-    ]
-  }
+      "token_address": "0x4f848d61b35033619ce558a2fce8447cedd38d0d",
+      "asset_id": "0x8b79ddf5ff2f0db54884b06a0b748a687abe7eb723e676eac22a5a811e9312ae",
+      "decimals": 18,
+      "min_amount": 60.0,
+      "max_amount": 130.0
+    },
+    {
+      "name": "Corporate Bond",
+      "symbol": "CORP",
+      "token_address": "0x656b4948c470f3420805abcb43f3928820a0f26d",
+      "asset_id": "0xb6dad7cac45cd7ee7d611c0160667e8595bcece1e8dc2b22228b6f329e1caa60",
+      "decimals": 18,
+      "min_amount": 55.0,
+      "max_amount": 120.0
+    },
+    {
+      "name": "US Treasury",
+      "symbol": "UST",
+      "token_address": "0x5e789bb07b2225132d26bb0ffaca7e37a5ecbebb",
+      "asset_id": "0xd048a586b49e0cf14afc137d0ebec0024a50aa5be56d006ecf46088f47537e33",
+      "decimals": 18,
+      "min_amount": 59.0,
+      "max_amount": 126.0
+    }
+  ]
+}
 }

@@ -4,7 +4,13 @@ import time
 from web3 import Web3
 from utils.logger import setup_logger
 from utils.randomizer import Randomizer
-from config.constants import is_rise_network, is_opn_network, is_arc_network, normalize_network_name
+from config.constants import (
+    is_rise_network,
+    is_opn_network,
+    is_arc_network,
+    is_pharos_network,
+    normalize_network_name
+)
 
 
 class SwapService:
@@ -53,6 +59,16 @@ class SwapService:
                 self.router_type = "iopn"
                 self.router_abi = self._get_iopn_router_abi()
                 self.logger.info("✅ Using IOPN router for OPN Testnet")
+
+            elif is_pharos_network(normalized_name) or chain_id == 688689:
+                configured_address = None
+                if network_config:
+                    configured_address = network_config.get('contracts', {}).get('bitverse_router')
+                # Используем найденный Bitverse universal router (execute)
+                self.router_address = configured_address or "0x585fC3b498b1ABA1F0527663789361D3547aFC88"
+                self.router_type = "pharos_bitverse"
+                self.router_abi = self._get_universal_router_abi()
+                self.logger.info("✅ Using Bitverse router for Pharos Atlantic")
 
             elif is_arc_network(normalized_name) or chain_id == 5042002:
                 configured_address = None
@@ -125,6 +141,19 @@ class SwapService:
                 "name": "swapExactOPNForTokens",
                 "outputs": [],
                 "stateMutability": "payable",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    {"internalType": "uint256", "name": "amountIn", "type": "uint256"},
+                    {"internalType": "uint256", "name": "amountOutMin", "type": "uint256"},
+                    {"internalType": "address[]", "name": "path", "type": "address[]"},
+                    {"internalType": "address", "name": "to", "type": "address"},
+                    {"internalType": "uint256", "name": "deadline", "type": "uint256"}
+                ],
+                "name": "swapExactTokensForOPN",
+                "outputs": [],
+                "stateMutability": "nonpayable",
                 "type": "function"
             }
         ]
@@ -465,6 +494,9 @@ class SwapService:
             self.logger.warning(f"⚠️ Swap operations disabled for {normalized_network}")
             return False
 
+        if is_pharos_network(normalized_network):
+            return await self._execute_pharos_swap(wallet, normalized_network)
+
         if is_arc_network(normalized_network):
             return await self._execute_arc_swap(wallet, normalized_network)
 
@@ -595,8 +627,194 @@ class SwapService:
 
         return templates
 
+    async def _execute_pharos_swap(self, wallet, normalized_network: str) -> bool:
+        """SWAP для Pharos Atlantic через Bitverse Universal Router (ETH/WETH, WBTC, USDT)"""
+        try:
+            if self.router_type != "pharos_bitverse" or not self.router_contract:
+                self.logger.error("❌ Bitverse router is not configured for Pharos")
+                return False
+
+            if not wallet.web3 or not wallet.web3.is_connected():
+                network_config = self.config.get_network_by_name(normalized_network)
+                if not network_config or not wallet.connect_to_network(network_config['rpc_url']):
+                    self.logger.error("❌ Wallet not connected to Pharos network")
+                    return False
+
+            tokens = self.config.get_tokens_for_network(normalized_network)
+            if not tokens:
+                self.logger.error("❌ No tokens configured for Pharos Atlantic")
+                return False
+
+            for required in ['USDT', 'WETH', 'WBTC']:
+                if not tokens.get(required):
+                    self.logger.error(f"❌ Missing token address for {required} on Pharos")
+                    return False
+
+            balance_snapshot = await self._snapshot_token_balances(wallet, tokens)
+            token_balances = {sym: bal for sym, bal in balance_snapshot.items() if sym != '__native__' and bal > 0}
+            self.logger.debug(
+                f"💰 Pharos balances | tokens: {', '.join(token_balances.keys()) if token_balances else 'none'}"
+            )
+
+            amount_presets = {
+                'USDT': {'min': 30.0, 'max': 80.0, 'precisions': [1, 0.1, 0.01]},
+                'WETH': {'min': 0.008, 'max': 0.025, 'precisions': [0.001, 0.0001]},
+                'WBTC': {'min': 0.00025, 'max': 0.0012, 'precisions': [0.0001, 0.00001]}
+            }
+
+            decimals_cache = {}
+
+            async def get_decimals(symbol: str) -> int:
+                if symbol not in decimals_cache:
+                    decimals_cache[symbol] = await self.get_token_decimals(tokens.get(symbol))
+                return decimals_cache[symbol]
+
+            async def choose_amount(symbol: str, balance_raw: int) -> int:
+                preset = amount_presets.get(symbol)
+                if not preset or balance_raw <= 0:
+                    return 0
+
+                decimals = await get_decimals(symbol)
+                min_raw = int(preset['min'] * (10 ** decimals))
+                max_raw = int(preset['max'] * (10 ** decimals))
+                precision = random.choice(preset['precisions'])
+                precision_str = f"{precision:.10f}".rstrip("0").rstrip(".")
+                digits = len(precision_str.split(".")[1]) if "." in precision_str else 0
+
+                amount_float = round(random.uniform(preset['min'], preset['max']), digits)
+                amount_raw = int(amount_float * (10 ** decimals))
+                amount_raw = max(min_raw, min(amount_raw, max_raw))
+
+                spend_cap = int(balance_raw * 0.95)
+                if spend_cap <= 0:
+                    return 0
+                amount_raw = min(amount_raw, spend_cap)
+                return amount_raw if amount_raw > 0 else 0
+
+            swap_pairs = [
+                ('USDT', 'WETH'),
+                ('USDT', 'WBTC'),
+                ('WETH', 'USDT'),
+                ('WBTC', 'USDT')
+            ]
+            random.shuffle(swap_pairs)
+
+            base_fee = self.web3.eth.gas_price
+            gas_price = max(base_fee, self.web3.to_wei(1, 'gwei'))
+            deadline = int(time.time()) + 1800
+            command_byte = b"\x10"
+
+            def build_bitverse_input(token_in: str, token_out: str, amount: int) -> bytes:
+                """
+                Сборка bytes для Bitverse execute по фактической структуре успешных вызовов (35 слов, offset 0x360):
+                [0]=0x60, [1]=0xA0, [2]=deadline, [3]=1, [4]=0x100..., [5]=1, [6]=0x20, [7]=0x360,
+                [8]=0x40, [9]=0x80, [10]=0x3, [11]=0x060c0f..., [12]=0x3, [13]=0x60, [14]=0x200, [15]=0x260,
+                [16]=0x180, [17]=0x20, [18]=token_out, [19]=token_in, [20]=0x0bb8, [21]=0x5,
+                [22]=0, [23]=0, [24]=amount, [25]=0, [26]=0x120, [27]=0x1, [28]=0, [29]=0x40,
+                [30]=token_in, [31]=amount, [32]=0x40, [33]=token_out, [34]=0
+                """
+                t_in = int(token_in, 16)
+                t_out = int(token_out, 16)
+                words = [0] * 35
+                words[0] = 0x60
+                words[1] = 0xA0
+                words[2] = deadline
+                words[3] = 0x1
+                words[4] = int("0100000000000000000000000000000000000000000000000000000000000000", 16)
+                words[5] = 0x1
+                words[6] = 0x20
+                words[7] = 0x360
+                words[8] = 0x40
+                words[9] = 0x80
+                words[10] = 0x3
+                words[11] = int("060c0f0000000000000000000000000000000000000000000000000000000000", 16)
+                words[12] = 0x3
+                words[13] = 0x60
+                words[14] = 0x200
+                words[15] = 0x260
+                words[16] = 0x180
+                words[17] = 0x20
+                words[18] = t_out
+                words[19] = t_in
+                words[20] = 0x0bb8
+                words[21] = 0x5
+                words[22] = 0
+                words[23] = 0
+                words[24] = amount
+                words[25] = 0
+                words[26] = 0x120
+                words[27] = 0x1
+                words[28] = 0
+                words[29] = 0x40
+                words[30] = t_in
+                words[31] = amount
+                words[32] = 0x40
+                words[33] = t_out
+                words[34] = 0
+                return b"".join(w.to_bytes(32, byteorder='big') for w in words)
+
+            for from_symbol, to_symbol in swap_pairs:
+                balance_raw = token_balances.get(from_symbol, 0)
+                if balance_raw <= 0:
+                    continue
+
+                amount_in = await choose_amount(from_symbol, balance_raw)
+                if amount_in <= 0:
+                    continue
+
+                if not await self.approve_token(wallet, tokens.get(from_symbol), amount_in):
+                    self.logger.warning(f"⚠️ Approval failed for {from_symbol}, trying next direction")
+                    continue
+
+                commands = command_byte
+                swap_input = build_bitverse_input(tokens.get(from_symbol), tokens.get(to_symbol), amount_in)
+                inputs = [swap_input]
+
+                try:
+                    tx = self.router_contract.functions.execute(
+                        commands,
+                        inputs,
+                        deadline
+                    ).build_transaction({
+                        'from': wallet.address,
+                        'value': 0,
+                        'gas': 900000,
+                        'maxFeePerGas': gas_price,
+                        'maxPriorityFeePerGas': gas_price,
+                        'nonce': self.web3.eth.get_transaction_count(wallet.address),
+                        'chainId': self.web3.eth.chain_id
+                    })
+
+                    self.logger.info(
+                        f"📤 Pharos swap {from_symbol}->{to_symbol} via Bitverse, amount: "
+                        f"{await self._format_amount(amount_in, tokens.get(from_symbol))}"
+                    )
+
+                    signed_txn = wallet.account.sign_transaction(tx)
+                    tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
+                    receipt = await asyncio.to_thread(
+                        self.web3.eth.wait_for_transaction_receipt,
+                        tx_hash,
+                        timeout=240
+                    )
+
+                    if receipt.status == 1:
+                        self.logger.info(f"✅ Pharos swap successful: {tx_hash.hex()}")
+                        return True
+
+                    self.logger.error("❌ Pharos swap reverted, trying another direction")
+                except Exception as e:
+                    self.logger.error(f"❌ Pharos swap build/send failed: {e}")
+
+            self.logger.warning("⚠️ No eligible Pharos swap executed (insufficient balances or all attempts failed)")
+            return False
+
+        except Exception as e:
+            self.logger.error(f"❌ Pharos swap failed: {e}")
+            return False
+
     async def _execute_arc_defi_swap(self, wallet, tokens: dict, nonzero_tokens: dict) -> bool:
-        """SWAP через DeFi router (defi-on-arc) с мин. суммой 5 USDC и балансом >=40 USDC"""
+        """SWAP через DeFi router (defi-on-arc) с мин. суммой 5 USDC и балансом >=80 USDC"""
         try:
             if not self.arc_defi_router_contract:
                 return False
@@ -608,9 +826,9 @@ class SwapService:
 
             usdc_balance = nonzero_tokens.get('USDC', 0)
             usdc_decimals = await self.get_token_decimals(usdc_addr)
-            min_balance_required = int(40 * (10 ** usdc_decimals))
+            min_balance_required = int(80 * (10 ** usdc_decimals))
             if usdc_balance < min_balance_required:
-                self.logger.debug("ℹ️ USDC balance below 40, skipping DeFi router")
+                self.logger.debug("ℹ️ USDC balance below 80, skipping DeFi router")
                 return False
 
             target_symbols = ['EURC', 'SRAC', 'RACS', 'SACS', 'KITTY', 'DOGG']
@@ -692,7 +910,7 @@ class SwapService:
             self.logger.error(f"❌ Arc DeFi router swap failed: {e}")
             return False
 
-    async def _execute_arc_swap(self, wallet, normalized_network: str) -> bool:
+    async def _execute_arc_swap(self, wallet, normalized_network: str, _retry: bool = False) -> bool:
         """SWAP для Arc Testnet: случайно Universal Router (Synthra) или Curve"""
         try:
             if self.router_type != "arc_universal" or not self.router_contract:
@@ -763,6 +981,14 @@ class SwapService:
                 self.logger.debug("ℹ️ No Curve routes available or curve router missing, falling back to Universal")
                 use_curve = False
 
+            # Маршруты, которые стабильно ревертят на Curve/Universal — не выбираем как цели/источники
+            curve_blacklist = {'TST', 'EURC', 'CA4F'}
+            async def arc_reroll():
+                if _retry:
+                    return False
+                self.logger.info("🔁 Arc swap reroll: trying a different route in the same iteration")
+                return await self._execute_arc_swap(wallet, normalized_network, _retry=True)
+
             # Попробуем новый DeFi роутер с равной вероятностью (~1/3), если хватает USDC
             if allow_defi_router and random.random() < 0.34:
                 success_defi = await self._execute_arc_defi_swap(wallet, tokens, nonzero_tokens)
@@ -827,16 +1053,21 @@ class SwapService:
                     target_symbol = None
                     route_data = None
                     if native_to_token:
-                        target_symbol = random.choice(arc_tokens)
-                        route_data = templates.get(target_symbol, {}).get('forward')
-                        # Отбрасываем Curve для целей TST/EURC/CA4F если сумма < 1 USDC
-                        if target_symbol in {'TST', 'EURC', 'CA4F'} and amount_in < self.web3.to_wei(1, 'ether'):
-                            self.logger.debug(f"ℹ️ Amount too low for Curve target {target_symbol}, skipping")
+                        allowed_forward = [t for t in arc_tokens if t not in curve_blacklist]
+                        if not allowed_forward:
+                            self.logger.debug("ℹ️ No allowed Curve targets after blacklist, fallback to Universal")
                             use_curve = False
-                            route_data = None
+                        else:
+                            target_symbol = random.choice(allowed_forward)
+                            route_data = templates.get(target_symbol, {}).get('forward')
+                            # Отбрасываем Curve для целей TST/EURC/CA4F если сумма < 1 USDC
+                            if target_symbol in {'TST', 'EURC', 'CA4F'} and amount_in < self.web3.to_wei(1, 'ether'):
+                                self.logger.debug(f"ℹ️ Amount too low for Curve target {target_symbol}, skipping")
+                                use_curve = False
+                                route_data = None
                     else:
                         # Берем только те токены, по которым есть баланс
-                        candidates = [t for t in arc_tokens if t in nonzero_tokens]
+                        candidates = [t for t in arc_tokens if t in nonzero_tokens and t not in curve_blacklist]
                         if not candidates:
                             self.logger.warning("⚠️ No token balance for Curve swap")
                             use_curve = False
@@ -984,7 +1215,7 @@ class SwapService:
                 # token -> native (USDC is chain native)
                 if from_symbol not in allowed_tokens:
                     self.logger.error(f"❌ Universal router not allowed for token {from_symbol}")
-                    return False
+                    return await arc_reroll()
 
                 token_addr = tokens.get(from_symbol)
                 if not token_addr:
@@ -1072,12 +1303,17 @@ class SwapService:
             if not arc_tokens or not self.arc_curve_router_contract:
                 return False
 
+            gas_price_retry = max(self.web3.eth.gas_price, int(gas_price * 1.1))
+
             # Пробуем тот же баланс/направление, но через Curve
             route_data = None
             target_symbol = native_symbol
             spendable = 0
             if native_to_token:
-                target_symbol = random.choice(arc_tokens)
+                allowed_forward = [t for t in arc_tokens if t not in curve_blacklist]
+                if not allowed_forward:
+                    return False
+                target_symbol = random.choice(allowed_forward)
                 route_data = templates.get(target_symbol, {}).get('forward')
                 if not route_data:
                     return False
@@ -1131,7 +1367,7 @@ class SwapService:
                 'from': wallet.address,
                 'value': amount_in if native_to_token else 0,
                 'gas': 700000,
-                'gasPrice': gas_price,
+                'gasPrice': gas_price_retry,
                 'nonce': self.web3.eth.get_transaction_count(wallet.address),
                 'chainId': self.web3.eth.chain_id
             })
@@ -1157,14 +1393,14 @@ class SwapService:
                 return True
 
             self.logger.error("❌ Arc swap failed (fallback Curve reverted)")
-            return False
+            return await arc_reroll()
 
         except Exception as e:
             self.logger.error(f"❌ Arc swap failed: {e}")
-            return False
+            return await arc_reroll()
 
     async def _execute_opn_swap(self, wallet, normalized_network: str) -> bool:
-        """SWAP/обертка для OPN Testnet"""
+        """SWAP/обертка для OPN Testnet (в обе стороны OPN <-> токены)"""
         try:
             if self.router_type != "iopn" or not self.router_address:
                 self.logger.error("❌ IOPN router is not configured")
@@ -1199,42 +1435,203 @@ class SwapService:
                 f"💰 Swap balance snapshot | native: {self.web3.from_wei(native_balance, 'ether'):.6f} "
                 f"| tokens: {', '.join(nonzero_tokens.keys()) if nonzero_tokens else 'none'}")
 
-            balance = native_balance
-            if balance <= 0:
-                self.logger.warning("⚠️ No OPN balance available for swap")
+            direction_roll = random.random()
+            reverse_symbols = ['OPNT', 'WOPN', 'tUSDT', 'tBNB']
+            reverse_candidates = {sym: bal for sym, bal in nonzero_tokens.items() if sym in reverse_symbols}
+
+            has_native_for_swap = native_balance > 0
+            has_tokens_for_swap = bool(reverse_candidates)
+
+            if not has_native_for_swap and not has_tokens_for_swap:
+                self.logger.warning("⚠️ No balance available for any OPN swap direction")
                 return False
+
+            # 50/50 между OPN->токены и токен->токен (включая OPN как цель)
+            prefer_native_to_tokens = direction_roll < 0.5
+
+            if prefer_native_to_tokens and has_native_for_swap:
+                direction = "native_to_token"
+            elif has_tokens_for_swap:
+                direction = "token_to_token"
+            elif has_native_for_swap:
+                direction = "native_to_token"
+            else:
+                direction = "token_to_token"
+
+            def _pick_amount(balance_raw: int, decimals: int, pct_range: tuple,
+                             precision_options: list, max_spend: int = None) -> int:
+                """Случайный процент с вариативной точностью"""
+                pct = random.uniform(pct_range[0], pct_range[1])
+                digits = random.choice(precision_options)
+                amount_float = (balance_raw / (10 ** decimals)) * pct / 100
+                amount_float = round(amount_float, digits)
+                amount_raw = int(amount_float * (10 ** decimals))
+                cap = max_spend if max_spend is not None else balance_raw
+                amount_raw = min(amount_raw, cap)
+                if amount_raw <= 0:
+                    amount_raw = min(cap, 1)
+                return amount_raw
+
+            if direction == "native_to_token":
+                gas_reserve = wallet.web3.to_wei(0.02, 'ether')
+                spendable_balance = max(native_balance - gas_reserve, 0)
+                if spendable_balance <= 0:
+                    self.logger.warning("⚠️ Not enough balance to keep gas reserve on OPN")
+                    return False
+
+                # 3-7% от OPN с плавающей точностью
+                amount_in = _pick_amount(
+                    spendable_balance,
+                    18,
+                    (3.0, 7.0),
+                    [3, 4, 5],
+                    spendable_balance
+                )
+                if amount_in <= 0:
+                    self.logger.warning("⚠️ Swap amount is below threshold after adjustments")
+                    return False
+
+                target_symbol = random.choice(available_targets)
+                self.logger.info(
+                    f"🎯 OPN swap target: {target_symbol}, amount: {wallet.web3.from_wei(amount_in, 'ether'):.6f} OPN")
+
+                if target_symbol == 'WOPN':
+                    return await self._wrap_opn_to_wopn(wallet, wopn_address, amount_in)
+
+                target_address = tokens.get(target_symbol)
+                if not target_address:
+                    self.logger.error(f"❌ Token address not configured for {target_symbol}")
+                    return False
+
+                return await self._perform_opn_swap(wallet, amount_in, wopn_address, target_address, target_symbol)
+
+            # token -> token (включая OPN как цель)
+            from_symbol, token_balance = random.choice(list(reverse_candidates.items()))
+            token_address = tokens.get(from_symbol)
+            if not token_address:
+                self.logger.error(f"❌ Token address not configured for {from_symbol}")
+                return False
+
+            target_pool = [sym for sym in available_targets + ['OPN'] if sym != from_symbol]
+            if from_symbol == 'WOPN':
+                # Исключаем направление WOPN -> OPN
+                target_pool = [sym for sym in target_pool if sym != 'OPN']
+            if not target_pool:
+                self.logger.warning("⚠️ No suitable target token for OPN token->token swap")
+                return False
+            target_symbol = random.choice(target_pool)
+
+            decimals = await self.get_token_decimals(token_address)
+            # 4-11% для токенов (не OPN) с рандомной точностью
+            amount_in = _pick_amount(
+                token_balance,
+                decimals,
+                (4.0, 11.0),
+                [2, 3, 4, 5],
+                token_balance
+            )
+
+            opn_balance_before = wallet.web3.eth.get_balance(wallet.address)
+            gained_native = 0
+
+            if from_symbol == 'WOPN':
+                gas_price = max(self.web3.eth.gas_price, self.web3.to_wei(7, 'gwei'))
+                wopn_contract = self.web3.eth.contract(
+                    address=Web3.to_checksum_address(token_address),
+                    abi=self._get_wopn_abi()
+                )
+                tx = wopn_contract.functions.withdraw(amount_in).build_transaction({
+                    'from': wallet.address,
+                    'value': 0,
+                    'gas': 120000,
+                    'gasPrice': gas_price,
+                    'nonce': self.web3.eth.get_transaction_count(wallet.address),
+                    'chainId': self.web3.eth.chain_id
+                })
+
+                self.logger.info(
+                    f"📤 OPN unwrap WOPN -> OPN for token swap, amount: {await self._format_amount(amount_in, token_address)}"
+                )
+                signed_txn = wallet.account.sign_transaction(tx)
+                tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
+                receipt = await asyncio.to_thread(
+                    self.web3.eth.wait_for_transaction_receipt,
+                    tx_hash,
+                    timeout=180
+                )
+                if receipt.status != 1:
+                    self.logger.error("❌ WOPN unwrap failed")
+                    return False
+
+                self.logger.info(f"✅ Unwrapped WOPN to OPN: {tx_hash.hex()}")
+                gained_native = amount_in
+            else:
+                if not await self.approve_token(wallet, token_address, amount_in):
+                    return False
+
+                deadline = self.web3.eth.get_block('latest')['timestamp'] + 1200
+                gas_price = max(self.web3.eth.gas_price, self.web3.to_wei(7, 'gwei'))
+                path = [
+                    Web3.to_checksum_address(token_address),
+                    Web3.to_checksum_address(wopn_address)
+                ]
+
+                transaction = self.router_contract.functions.swapExactTokensForOPN(
+                    amount_in,
+                    0,
+                    path,
+                    wallet.address,
+                    deadline
+                ).build_transaction({
+                    'from': wallet.address,
+                    'value': 0,
+                    'gas': 500000,
+                    'gasPrice': gas_price,
+                    'nonce': self.web3.eth.get_transaction_count(wallet.address),
+                    'chainId': self.web3.eth.chain_id
+                })
+
+                self.logger.info(
+                    f"📤 OPN swap token->OPN for routing: {from_symbol} amount {amount_in / (10 ** decimals):.6f} -> OPN"
+                )
+
+                signed_txn = wallet.account.sign_transaction(transaction)
+                tx_hash = self.web3.eth.send_raw_transaction(signed_txn.raw_transaction)
+                receipt = await asyncio.to_thread(
+                    self.web3.eth.wait_for_transaction_receipt,
+                    tx_hash,
+                    timeout=180
+                )
+
+                if receipt.status != 1:
+                    self.logger.error("❌ swapExactTokensForOPN reverted")
+                    return False
+
+                opn_balance_after = wallet.web3.eth.get_balance(wallet.address)
+                gained_native = max(opn_balance_after - opn_balance_before, 0)
+                self.logger.info(
+                    f"✅ OPN swap successful: {tx_hash.hex()} | {from_symbol} -> OPN, received ~{await self._format_amount(gained_native or amount_in, '0x0000000000000000000000000000000000000000')} OPN"
+                )
+
+            if target_symbol == 'OPN':
+                return True
 
             gas_reserve = wallet.web3.to_wei(0.02, 'ether')
-            spendable_balance = max(balance - gas_reserve, 0)
-            if spendable_balance <= 0:
-                self.logger.warning("⚠️ Not enough balance to keep gas reserve on OPN")
+            spendable_native = max(gained_native - gas_reserve, 0)
+            if spendable_native <= 0:
+                self.logger.warning("⚠️ Not enough OPN after first leg to proceed with token swap")
                 return False
 
-            swap_percentage = random.uniform(3, 10) / 100
-            amount_in = int(balance * swap_percentage)
-            min_amount = wallet.web3.to_wei(0.001, 'ether')
-            if amount_in < min_amount:
-                amount_in = min_amount
-            if amount_in > spendable_balance:
-                amount_in = spendable_balance
-
-            if amount_in <= 0:
-                self.logger.warning("⚠️ Swap amount is below threshold after adjustments")
-                return False
-
-            target_symbol = random.choice(available_targets)
-            self.logger.info(
-                f"🎯 OPN swap target: {target_symbol}, amount: {wallet.web3.from_wei(amount_in, 'ether'):.6f} OPN")
-
+            # Вторая нога: OPN -> целевой токен
             if target_symbol == 'WOPN':
-                return await self._wrap_opn_to_wopn(wallet, wopn_address, amount_in)
+                return await self._wrap_opn_to_wopn(wallet, wopn_address, spendable_native)
 
             target_address = tokens.get(target_symbol)
             if not target_address:
-                self.logger.error(f"❌ Token address not configured for {target_symbol}")
+                self.logger.error(f"❌ Target token address not configured for {target_symbol}")
                 return False
 
-            return await self._perform_opn_swap(wallet, amount_in, wopn_address, target_address, target_symbol)
+            return await self._perform_opn_swap(wallet, spendable_native, wopn_address, target_address, target_symbol)
 
         except Exception as e:
             self.logger.error(f"❌ OPN swap failed: {e}")

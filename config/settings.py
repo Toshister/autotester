@@ -212,18 +212,18 @@ class Config:
                         "PHRS": "0x0000000000000000000000000000000000000000",
                         "USDC": "0xE0BE08c77f415F577A1B3A9aD7a1Df1479564ec8",
                         "USDT": "0xE7E84B8B4f39C507499c40B4ac199B050e2882d5",
-                        "PCT": "0x4f848d61b35033619ce558a2fce8447cedd38d0d",
-                        "CORP": "0x656b4948c470f3420805abcb43f3928820a0f26d",
-                        "UST": "0x5e789bb07b2225132d26bb0ffaca7e37a5ecbebb",
-                        "WBTC": "0x0c64F03EEa5c30946D5c55B4b532D08ad74638a4",
-                        "WETH": "0x7d211F77525ea39A0592794f793cC1036eEaccD5",
-                        "WPHRS": "0x838800b758277CC111B2d48Ab01e5E164f8E9471"
-                    },
-                    "contracts": {
-                        "faroswap_router": "0x1E656B2C6B6e91ef6E6A2B16475Df7b7D223e3c2",
-                        "structure_subscription": "0x62fdbc600e8badf8127e6298dd12b961edf08b5f"
-                    }
+                    "PCT": "0x4f848d61b35033619ce558a2fce8447cedd38d0d",
+                    "CORP": "0x656b4948c470f3420805abcb43f3928820a0f26d",
+                    "UST": "0x5e789bb07b2225132d26bb0ffaca7e37a5ecbebb",
+                    "WBTC": "0x0c64F03EEa5c30946D5c55B4b532D08ad74638a4",
+                    "WETH": "0x7d211F77525ea39A0592794f793cC1036eEaccD5",
+                    "WPHRS": "0x838800b758277CC111B2d48Ab01e5E164f8E9471"
                 },
+                "contracts": {
+                    "bitverse_router": "0x585fC3b498b1ABA1F0527663789361D3547aFC88",
+                    "structure_subscription": "0x62fdbc600e8badf8127e6298dd12b961edf08b5f"
+                }
+            },
                 {
                     "name": "Rise Testnet",
                     "rpc_url": "https://testnet.riselabs.xyz",
@@ -316,8 +316,8 @@ class Config:
                         "token_address": "0x4f848d61b35033619ce558a2fce8447cedd38d0d",
                         "asset_id": "0x8b79ddf5ff2f0db54884b06a0b748a687abe7eb723e676eac22a5a811e9312ae",
                         "decimals": 18,
-                        "min_amount": 9.0,
-                        "max_amount": 34.0
+                        "min_amount": 35.0,
+                        "max_amount": 66.0
                     },
                     {
                         "name": "Corporate Bond",
@@ -325,8 +325,8 @@ class Config:
                         "token_address": "0x656b4948c470f3420805abcb43f3928820a0f26d",
                         "asset_id": "0xb6dad7cac45cd7ee7d611c0160667e8595bcece1e8dc2b22228b6f329e1caa60",
                         "decimals": 18,
-                        "min_amount": 9.0,
-                        "max_amount": 34.0
+                        "min_amount": 35.0,
+                        "max_amount": 66.0
                     },
                     {
                         "name": "US Treasury",
@@ -334,8 +334,8 @@ class Config:
                         "token_address": "0x5e789bb07b2225132d26bb0ffaca7e37a5ecbebb",
                         "asset_id": "0xd048a586b49e0cf14afc137d0ebec0024a50aa5be56d006ecf46088f47537e33",
                         "decimals": 18,
-                        "min_amount": 9.0,
-                        "max_amount": 34.0
+                        "min_amount": 35.0,
+                        "max_amount": 66.0
                     }
                 ]
             }
