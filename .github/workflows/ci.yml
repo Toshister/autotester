@@ -27,4 +27,6 @@ jobs:
         run: python -m py_compile services/swap_service.py
 
       - name: Run tests
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"  # отключаем автозагрузку сторонних плагинов (web3.tools.pytest_ethereum)
         run: pytest
