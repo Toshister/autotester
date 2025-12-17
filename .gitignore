@@ -1,0 +1,28 @@
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+env/
+venv/
+
+# Logs / data
+logs/
+*.log
+*.db
+*.sqlite
+
+# Environment / secrets
+.env
+.env.*
+
+# Build / dist
+build/
+dist/
+*.egg-info/
