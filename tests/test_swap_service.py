@@ -8,6 +8,8 @@ from services.swap_service import SwapService
 
 
 class DummyConfig:
+    """Минимальный конфиг для тестов без реальных RPC."""
+
     def __init__(self):
         self.tokens_arc = {
             "USDC": "0x3600000000000000000000000000000000000000",
@@ -85,7 +87,7 @@ class FakeWeb3:
 
 @pytest.mark.asyncio
 async def test_opn_native_to_token_respects_gas_reserve(monkeypatch):
-    """Native OPN swap keeps 0.02 reserve and forwards spendable amount."""
+    """Native OPN swap оставляет 0.02 OPN и тратит остаток."""
     monkeypatch.setattr(SwapService, "_initialize_router", lambda self: None)
     swap_service = SwapService(FakeWeb3(chain_id=984), DummyConfig())
 
@@ -104,7 +106,7 @@ async def test_opn_native_to_token_respects_gas_reserve(monkeypatch):
         or True,
     )
 
-    choice_iter = iter([3, "OPNT"])  # precision digits, then target symbol
+    choice_iter = iter([3, "OPNT"])  # precision digits, затем цель
     monkeypatch.setattr(random, "random", lambda: 0.1)
     monkeypatch.setattr(random, "uniform", lambda _a, _b: 5.0)
     monkeypatch.setattr(random, "choice", lambda seq: next(choice_iter))
@@ -112,7 +114,7 @@ async def test_opn_native_to_token_respects_gas_reserve(monkeypatch):
     wallet = SimpleNamespace(address="0x" + "1" * 40, web3=swap_service.web3)
     result = await swap_service._execute_opn_swap(wallet, "opn testnet")
 
-    expected_amount = 2_000_000_000_000_000  # 0.002 OPN in wei-equivalent
+    expected_amount = 2_000_000_000_000_000  # 0.002 OPN в wei-эквиваленте
     assert result is True
     assert captured["amount"] == expected_amount
     assert captured["target"] == "OPNT"
@@ -120,7 +122,7 @@ async def test_opn_native_to_token_respects_gas_reserve(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_arc_defi_skips_when_usdc_below_threshold(monkeypatch):
-    """DeFi router should be skipped if USDC balance < 80."""
+    """DeFi роутер на Arc должен пропускаться, если USDC < 80."""
     monkeypatch.setattr(SwapService, "_initialize_router", lambda self: None)
     swap_service = SwapService(FakeWeb3(chain_id=5042002), DummyConfig())
     swap_service.arc_defi_router_contract = SimpleNamespace(
@@ -129,7 +131,7 @@ async def test_arc_defi_skips_when_usdc_below_threshold(monkeypatch):
     monkeypatch.setattr(swap_service, "get_token_decimals", lambda _addr: 6)
 
     tokens = swap_service.config.get_tokens_for_network("arc testnet")
-    nonzero_tokens = {"USDC": int(1 * 10**6)}  # 1 USDC with 6 decimals
+    nonzero_tokens = {"USDC": int(1 * 10**6)}  # 1 USDC c 6 знаками
     wallet = SimpleNamespace(address="0x" + "3" * 40)
 
     result = await swap_service._execute_arc_defi_swap(wallet, tokens, nonzero_tokens)

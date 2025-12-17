@@ -17,6 +17,7 @@ logs/
 *.log
 *.db
 *.sqlite
+opn_debug*.html
 
 # Environment / secrets
 .env
