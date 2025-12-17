@@ -29,4 +29,5 @@ jobs:
       - name: Run tests
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"  # отключаем автозагрузку сторонних плагинов (web3.tools.pytest_ethereum)
+          PYTHONPATH: "${{ github.workspace }}"
         run: pytest
